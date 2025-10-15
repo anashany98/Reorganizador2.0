@@ -215,6 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_scan(args: argparse.Namespace) -> None:
+    """Procesa la carpeta origen una única vez con las opciones del comando `scan`."""
     log_file = config.setup_logging(args.log_level)
     console.print(f"[green]Logs guardados en[/green] {log_file}")
 
@@ -289,6 +290,7 @@ def run_scan(args: argparse.Namespace) -> None:
 
 
 def run_watch(args: argparse.Namespace) -> None:
+    """Mantiene una monitorización continua del origen y replica cambios en destino."""
     log_file = config.setup_logging(args.log_level)
     console.print(f"[green]Logs guardados en[/green] {log_file}")
 
@@ -338,6 +340,7 @@ def run_watch(args: argparse.Namespace) -> None:
 
 
 def run_verify(args: argparse.Namespace) -> None:
+    """Chequea que cada copia conserve el mismo hash que el archivo original."""
     log_file = config.setup_logging(args.log_level)
     console.print(f"[green]Logs guardados en[/green] {log_file}")
 

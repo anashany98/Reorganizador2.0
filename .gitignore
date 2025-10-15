@@ -1,0 +1,10 @@
+# Archivos generados automáticamente (no versionar)
+CSV-BD/
+logs/
+*.db
+*.csv
+
+# Entorno de Python
+.venv/
+__pycache__/
+

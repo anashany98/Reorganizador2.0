@@ -84,7 +84,7 @@ class SQLiteSink:
         )
         self._conn.commit()
 
-        # ensure new columns exist for legacy DBs
+        # Comprueba que las columnas nuevas existan en bases antiguas.
         cursor.execute("PRAGMA table_info(files)")
         columns = {row["name"] for row in cursor.fetchall()}
         migrations: List[tuple[str, str]] = []
@@ -96,6 +96,7 @@ class SQLiteSink:
             migrations.append(("proyecto", "TEXT"))
 
         for column, ddl in migrations:
+            # Aplica migraciones simples solo cuando hacen falta para no romper instalaciones previas.
             LOGGER.info("Adding missing '%s' column to SQLite database.", column)
             cursor.execute(f"ALTER TABLE files ADD COLUMN {column} {ddl}")
         self._conn.commit()

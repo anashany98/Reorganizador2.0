@@ -93,6 +93,7 @@ class SqlServerSink:
                 ALTER TABLE {self.table} ADD verified BIT DEFAULT(0);
             """
         )
+        # Mantiene el esquema actualizado aunque la tabla viniera de otra version.
         self._conn.commit()
 
     def insert_records(

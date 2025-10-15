@@ -27,7 +27,7 @@ class HashComputationError(RuntimeError):
     """Raised when a hash cannot be computed."""
 
 
-# Extension categories used by the hierarchical organizer mode.
+# Categorias de extension usadas por el modo de organizacion jerarquica.
 ARCHIVO_EXTENSIONS = {
     "pdf",
     "doc",
@@ -168,12 +168,14 @@ def extract_manager_project(path: Path, source_root: Path) -> Tuple[Optional[str
     gestor: Optional[str] = None
     proyecto: Optional[str] = None
 
+    # 1) Primero intenta con la ruta absoluta (util cuando se ejecuta fuera de source_root).
     from_path = strip_prefix(segments_after_marker(path.parts))
     gestor_path, proyecto_path = extract_from_segments(from_path)
     gestor = gestor_path or gestor
     proyecto = proyecto_path or proyecto
 
     try:
+        # 2) Luego intenta con la ruta relativa al source_root configurado.
         relative_parts = strip_prefix(path.relative_to(source_root).parts)
     except ValueError:
         relative_parts = []
@@ -181,6 +183,7 @@ def extract_manager_project(path: Path, source_root: Path) -> Tuple[Optional[str
     gestor = gestor or gestor_rel
     proyecto = proyecto or proyecto_rel
 
+    # 3) Por ultimo usa la informacion que pueda traer la ruta del propio source_root.
     from_root = strip_prefix(segments_after_marker(source_root.parts))
     gestor_root, proyecto_root = extract_from_segments(from_root)
     gestor = gestor or gestor_root
@@ -214,7 +217,7 @@ def build_destination_path(
     """
 
     relative = src.relative_to(source_root)
-    # Preserve the original hierarchy before appending organizational folders.
+    # Mantiene la jerarquia original antes de sumar carpetas de organizacion.
     base_parent = dest_root / relative.parent
     extension = (src.suffix[1:] or "noext").lower()
     if mode == "type":
@@ -224,7 +227,7 @@ def build_destination_path(
     elif mode == "type-date":
         dest = base_parent / extension / src.name
     elif mode == "hierarchical-type-ext":
-        # Preserve the full source hierarchy and append category + extension folders.
+        # Mantiene toda la jerarquia original y agrega la categoria y la extension.
         category, ext_label = categorize_file_by_extension(src)
         dest = base_parent / category / ext_label / src.name
     else:

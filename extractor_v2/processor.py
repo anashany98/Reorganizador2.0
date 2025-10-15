@@ -254,6 +254,7 @@ class FileProcessor:
     def process_path(self, path: Path) -> ProcessingRecord:
         metadata = self.gather_metadata(path)
         cache_entry = self.cache.get(path)
+        # Determina el gestor y el proyecto a partir de la jerarquía de carpetas.
         gestor, proyecto = file_utils.extract_manager_project(
             path=path, source_root=self.options.source_root
         )
@@ -286,6 +287,7 @@ class FileProcessor:
         )
 
         if should_skip:
+            # Devuelve el registro en caché si el destino sigue existente y no hubo cambios.
             record = ProcessingRecord(
                 metadata=metadata,
                 action="skip",
@@ -309,6 +311,7 @@ class FileProcessor:
         )
 
         if use_cached_hash:
+            # Reutiliza el hash de la ejecución anterior para evitar releer el archivo.
             hash_result = file_utils.HashResult(
                 algorithm=cache_entry.hash_algo or self.options.hash_algorithm,
                 value=cache_entry.hash_value,
@@ -340,6 +343,7 @@ class FileProcessor:
                     and self.options.verify_hash
                     and hash_result.value
                 ):
+                    # Solo verifica la copia cuando hace falta para evitar rehacer el hash.
                     needs_verification = not (
                         cache_entry
                         and cache_entry.dest_path == dest_path_str
