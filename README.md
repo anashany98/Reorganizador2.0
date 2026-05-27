@@ -1,97 +1,124 @@
 # Reorganizador 2.0
- La idea general es tener una herramienta que copie o mueva archivos desde una estructura como `Gestores/AÑO/GESTOR/PROYECTO` hacia otra carpeta destino, manteniendo la jerarquía y guardando un montón de información extra sobre cada archivo.
 
-## Qué hace
-- Recorre la carpeta origen y respeta la misma estructura en la carpeta destino.
-- Según la opción de organización, puede crear subcarpetas por tipo de archivo (`pdf`, `jpg`, etc.).
-- Saca metadatos básicos: tamaño, fechas, tipo MIME, hashes, rutas.
-- Detecta automáticamente el nombre del gestor y el número de proyecto leyendo la ruta.
-- Puede copiar o mover archivos y, si quieres, verificar que el hash del destino sea el mismo.
-- Guarda todos los datos en tres sitios al mismo tiempo (si los configuras): CSV, SQLite y SQL Server.
-- Tiene modo incremental, así que no repite trabajo si ya procesó un archivo.
-- Hay un comando que vigila la carpeta con Watchdog para copiar archivos nuevos al vuelo.
-- También existe un comando de verificación que recalcula los hashes para comprobar que todo sigue bien.
+Herramienta local para copiar o mover archivos desde una carpeta origen hacia una carpeta destino, conservar trazabilidad y guardar metadatos en CSV, SQLite y opcionalmente SQL Server.
+
+## Que hace
+
+- Recorre una carpeta origen de forma recursiva.
+- Copia o mueve archivos a destino.
+- Mantiene la jerarquia original o reorganiza por tipo, fecha, tipo-fecha, categoria o proyecto.
+- Extrae metadatos basicos: nombre, extension, MIME, tamaño, fechas, hashes y rutas.
+- Detecta gestor y numero de proyecto a partir de rutas tipo `Gestores/2025/MAR/250076/...`.
+- Evita repetir trabajo con modo incremental.
+- Verifica el hash del destino despues de copiar o mover, salvo que se use `--no-verify`.
+- Resuelve conflictos con `rename`, `overwrite`, `skip` u `overwrite-if-newer`.
+- Puede deduplicar archivos iguales con hardlinks (`--dedup`) cuando el sistema de archivos lo permite.
+- Incluye una interfaz web local para usuarios internos.
 
 ## Requisitos
-- Python 3.10 o superior.
-- Dependencias del archivo `extractor_v2/requirements.txt`:
-  - `rich`
-  - `watchdog`
-  - `pyodbc` (solo si vas a usar SQL Server)
-  - `tqdm`
 
-Instalación rápida:
-```bash
+- Python 3.10 o superior.
+- Windows recomendado para los lanzadores PowerShell.
+- Dependencias:
+
+```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r extractor_v2/requirements.txt
+pip install -r reorganizador_v2\requirements.txt
 ```
 
-## Comandos principales
-Todos los comandos se lanzan con `python -m extractor_v2.main ...`.
+## Uso rapido con PowerShell
 
-### Escaneo (scan)
-```bash
-python -m extractor_v2.main scan ^
-  --source "C:\ruta\origen\Gestores" ^
-  --dest "C:\ruta\destino\Gestores" ^
-  --organize-by type-date ^
-  --csv-out "CSV-BD\metadatos.csv" ^
-  --sqlite-db "CSV-BD\metadatos.db" ^
-  --dry-run
+Escaneo seguro sin copiar:
+
+```powershell
+.\launch_reorganizador_v2.ps1 -Command scan `
+  -Source "C:\ruta\origen" `
+  -Dest "D:\ruta\destino" `
+  -DryRun
 ```
-Opciones útiles:
-- `--organize-by`: `flat`, `type`, `date`, `type-date`.
-- `--move`: en vez de copiar, mueve.
-- `--dry-run`: muestra lo que haría sin tocar nada (muy recomendable al principio).
-- `--hash-algo`: `sha256`, `sha1`, `md5` o `none`.
-- `--no-incremental`: rehace todo aunque esté guardado en la BD/CSV.
-- `--no-verify`: salta la verificación del hash en la copia.
-- `--threads` y `--processes`: ajusta la concurrencia cuando hay muchos archivos.
 
-### Monitorización (watch)
-```bash
-python -m extractor_v2.main watch ^
-  --source "C:\carpeta\a\vigilar" ^
-  --dest "C:\carpeta\destino" ^
-  --organize-by type ^
-  --csv-out "CSV-BD\metadatos.csv" ^
+Copia real con verificacion de hash:
+
+```powershell
+.\launch_reorganizador_v2.ps1 -Command scan `
+  -Source "C:\ruta\origen" `
+  -Dest "D:\ruta\destino" `
+  -OrganizeBy type-date `
+  -CsvOut "CSV-BD\metadatos.csv" `
+  -SqliteDb "CSV-BD\metadatos.db"
+```
+
+Previsualizar antes de procesar:
+
+```powershell
+.\launch_reorganizador_v2.ps1 -Command preview `
+  -Source "C:\ruta\origen" `
+  -Projects "250076,250077"
+```
+
+Verificar copias ya registradas:
+
+```powershell
+.\launch_reorganizador_v2.ps1 -Command verify `
+  -SqliteDb "CSV-BD\metadatos.db" `
+  -HashAlgo sha256
+```
+
+## Uso directo con Python
+
+```powershell
+python -m reorganizador_v2.main scan `
+  --source "C:\ruta\origen" `
+  --dest "D:\ruta\destino" `
+  --organize-by type-date `
+  --hash-algo sha256 `
+  --csv-out "CSV-BD\metadatos.csv" `
   --sqlite-db "CSV-BD\metadatos.db"
 ```
-Escucha cambios en tiempo real y aplica la misma lógica de organización y guardado.
 
-### Verificación (verify)
-```bash
-python -m extractor_v2.main verify ^
-  --sqlite-db "CSV-BD\metadatos.db" ^
-  --hash-algo sha256
+Opciones utiles:
+
+- `--dry-run`: simula sin copiar ni mover.
+- `--move`: mueve archivos en vez de copiarlos.
+- `--organize-by`: `flat`, `type`, `date`, `type-date`, `hierarchical-type-ext`, `project-type`.
+- `--conflict`: `rename`, `overwrite`, `skip`, `overwrite-if-newer`.
+- `--projects`: lista separada por comas o ruta a TXT/CSV con numeros de proyecto.
+- `--dedup`: usa hardlinks para duplicados cuando es posible.
+- `--no-incremental`: ignora cache previa.
+- `--no-verify`: no recalcula hash del destino.
+- `--excel-out`: genera un Excel de auditoria al terminar.
+
+## Interfaz web local
+
+```powershell
+.\launch_web.ps1
 ```
-Vuelve a calcular el hash en origen y destino y avisa si falta algo o si no coincide.
 
-## Datos que se guardan
-Por cada archivo se almacena:
-- Nombre, extensión, tipo MIME y tamaño.
-- Fechas de creación, modificación y acceso.
-- Algoritmo de hash y valores calculados.
-- Rutas de origen y destino.
-- Acción realizada (`copy`, `move`, `skip`), estado y errores si los hubo.
-- Campo `verified` para saber si la verificación salió bien.
-- **Gestor y proyecto**, que salen de la ruta del archivo (`Gestores/2025/MAR/250076/...`).
+El servidor escucha por defecto en `http://127.0.0.1:8000`. Si el puerto esta ocupado y no se indico `-Port`, el lanzador busca otro puerto disponible.
 
-## Dónde se guardan los datos
-- **CSV**: usa `metadatos.csv`, muy útil para abrir en Excel o compartir.
-- **SQLite**: la tabla `files` se crea sola (`metadatos.db`) y se actualiza con `INSERT` o `UPDATE` según corresponda.
-- **SQL Server**: opcional, usando `pyodbc` y la tabla `dbo.files`. Si la tabla existe pero le faltan columnas nuevas, se añaden automáticamente.
+## Datos generados
 
-## Logs
-- Se guardan en `logs/AAAA-MM-DD.log`.
-- En la consola se usan colores y tablas gracias a la librería Rich.
-- Los mensajes “Adding missing 'gestor' column…” aparecen cuando la BD todavía no tenía esas columnas; solo sale una vez.
+Cada registro incluye:
 
-## Consejos personales
-- Siempre empiezo con `--dry-run` para ver si las carpetas y rutas quedan como espero.
-- No borres el CSV ni la base de datos si quieres que el modo incremental funcione.
-- Si activas `--move`, asegúrate de tener copia de seguridad, por si acaso.
-- Programa verificaciones de vez en cuando para asegurarte de que la copia sigue intacta.
+- nombre, extension, MIME y tamaño;
+- fechas de creacion, modificacion y acceso;
+- hash de origen, hash de destino y resultado de verificacion;
+- ruta origen y destino;
+- gestor y proyecto detectados;
+- accion (`copy`, `move`, `hardlink`, `skip`, `scan`) y estado;
+- error, si lo hubo.
 
+## Recomendaciones de operacion interna
 
+- Ejecutar primero con `-DryRun`.
+- Usar SQLite como fuente principal de trazabilidad (`CSV-BD\metadatos.db`).
+- Mantener `--no-verify` desactivado salvo que haya una razon operativa clara.
+- Probar filtros de proyecto con `preview` antes de una copia real.
+- No versionar bases de datos, CSV, logs ni salidas de auditoria generadas.
+
+## Pruebas
+
+```powershell
+python -m pytest -q
+```

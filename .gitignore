@@ -3,8 +3,22 @@ CSV-BD/
 logs/
 *.db
 *.csv
+*.bak
+auditoria*.xlsx
+web_metadatos.*
+metadatos.*
+output/
+demo_source/
+demo_dest/
+test_filter_source/
+test_filter_dest/
 
 # Entorno de Python
 .venv/
 __pycache__/
+.pytest_cache/
 
+# Variables de entorno
+.env
+
+.sisyphus/

@@ -14,6 +14,10 @@ from .processor import FileProcessor, SinkManager
 
 LOGGER = logging.getLogger(__name__)
 
+# Ventana de debouncing para evitar procesar el mismo archivo varias veces
+# cuando el sistema dispara múltiples eventos en rápida sucesión.
+_DEBOUNCE_WINDOW_SECONDS = 2.0
+
 
 class NuevoArchivoHandler(FileSystemEventHandler):
     """Watchdog handler that triggers processing on new or updated files."""
@@ -23,6 +27,22 @@ class NuevoArchivoHandler(FileSystemEventHandler):
         self.processor = processor
         self.sink_manager = sink_manager
         self._lock = threading.Lock()
+        self._recently_processed: dict[str, float] = {}
+
+    def _should_debounce(self, path_str: str) -> bool:
+        """Evita procesar un mismo path si ya se trató hace menos de la ventana."""
+        now = time.monotonic()
+        last = self._recently_processed.get(path_str)
+        if last is not None and (now - last) < _DEBOUNCE_WINDOW_SECONDS:
+            return True
+        self._recently_processed[path_str] = now
+        # Limpieza periódica para que el diccionario no crezca sin control.
+        if len(self._recently_processed) > 500:
+            cutoff = now - _DEBOUNCE_WINDOW_SECONDS * 2
+            self._recently_processed = {
+                k: v for k, v in self._recently_processed.items() if v > cutoff
+            }
+        return False
 
     def on_created(self, event: FileSystemEvent) -> None:
         self._handle_event(event, reason="created")
@@ -36,6 +56,11 @@ class NuevoArchivoHandler(FileSystemEventHandler):
         path = Path(event.src_path)
         if not path.exists():
             return
+
+        path_str = str(path)
+        if self._should_debounce(path_str):
+            return
+
         try:
             with self._lock:
                 record = self.processor.process_path(path)

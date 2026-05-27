@@ -1,0 +1,333 @@
+﻿<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reorganizador 2.0</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-runtime="idle">
+
+<div class="layout">
+    <!-- === SIDEBAR === -->
+    <aside class="sidebar" id="sidebar">
+        <header class="logo">
+            <button class="sidebar-toggle" type="button" onclick="toggleSidebar()" title="Colapsar sidebar (Ctrl+B)">
+                <svg viewBox="0 0 16 16"><path d="M3 4l6 4-6 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <svg class="logo-icon" viewBox="0 0 32 32" aria-hidden="true">
+                <rect x="2" y="4" width="28" height="24" rx="5" fill="none" stroke="currentColor" stroke-width="2"/>
+                <path d="M9 12h14M9 18h10M9 24h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <circle cx="24" cy="11" r="3" fill="currentColor"/>
+            </svg>
+            <div class="logo-text">
+                <span class="logo-label">Reorganizador</span>
+                <span class="logo-version">2.0</span>
+            </div>
+        </header>
+
+        <div class="status-bar" id="statusBadge" data-state="idle">
+            <span class="status-pulse"></span>
+            <span id="statusText">Listo</span>
+        </div>
+
+        <!-- Source -->
+        <div class="field">
+            <label for="source">Origen</label>
+            <div class="input-row">
+                <input type="text" id="source" placeholder="C:\Gestores\2025" spellcheck="false">
+                <button class="btn-icon" type="button" onclick="browseFolder('source')" title="Explorar">
+                    <svg viewBox="0 0 16 16"><path d="M1.5 3.5A1.5 1.5 0 013 2h2.5l1.5 1.5H13A1.5 1.5 0 0114.5 5v6A1.5 1.5 0 0113 12.5H3A1.5 1.5 0 011.5 11z"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Destination -->
+        <div class="field">
+            <label for="dest">Destino</label>
+            <div class="input-row">
+                <input type="text" id="dest" placeholder="D:\Organizado" spellcheck="false">
+                <button class="btn-icon" type="button" onclick="browseFolder('dest')" title="Explorar">
+                    <svg viewBox="0 0 16 16"><path d="M1.5 3.5A1.5 1.5 0 013 2h2.5l1.5 1.5H13A1.5 1.5 0 0114.5 5v6A1.5 1.5 0 0113 12.5H3A1.5 1.5 0 011.5 11z"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Strategy -->
+        <div class="field">
+            <label for="organizeBy">Estrategia</label>
+            <select id="organizeBy">
+                <option value="type-date">Tipo + Fecha</option>
+                <option value="date">Fecha</option>
+                <option value="type">Tipo</option>
+                <option value="hierarchical-type-ext">Jerarquica + Tipo</option>
+                    <option value="project-type">Proyecto + Categoria (sin gestor)</option>
+                <option value="flat">Plano (espejo)</option>
+            </select>
+        </div>
+
+        <!-- Toggles -->
+        <div class="toggles">
+            <label class="toggle">
+                <input type="checkbox" id="moveFiles">
+                <span class="toggle-track"></span>
+                <span class="toggle-text">Mover (no copiar)</span>
+            </label>
+            <label class="toggle">
+                <input type="checkbox" id="dryRun" checked>
+                <span class="toggle-track"></span>
+                <span class="toggle-text">Simulacion segura</span>
+            </label>
+        </div>
+
+        <!-- Filters -->
+        <details class="filters">
+            <summary>Filtros</summary>
+            <div class="field">
+                <label for="minSize">Tamano minimo (MB)</label>
+                <input type="number" id="minSize" value="0" step="0.1" class="input-sm">
+            </div>
+            <div class="field">
+                <label for="extensions">Extensiones</label>
+                <input type="text" id="extensions" placeholder="pdf, jpg, xlsx" class="input-sm" spellcheck="false">
+            </div>
+            <div class="field">
+                <label for="projectFilter">Proyectos (uno por linea o separado por comas)</label>
+                <textarea id="projectFilter" rows="3" placeholder="250076&#10;250077&#10;250-078" class="input-sm" spellcheck="false"></textarea>
+            </div>
+                    <div class="field">
+                <label for="threads">Hilos de proceso</label>
+                <input type="number" id="threads" value="0" min="0" max="64" class="input-sm" placeholder="Auto">
+            </div>
+            <div class="field">
+                <label for="processes">Procesos de hash</label>
+                <input type="number" id="processes" value="0" min="0" max="32" class="input-sm" placeholder="Auto">
+            </div>
+                <label class="toggle">
+                <input type="checkbox" id="dedup">
+                <span class="toggle-track"></span>
+                <span class="toggle-text">Dedup (hardlinks)</span>
+            </label>
+            <div class="field">
+                <label for="conflict">Conflicto</label>
+                <select id="conflict">
+                    <option value="rename">Renombrar (_1, _2)</option>
+                    <option value="overwrite">Sobrescribir</option>
+                    <option value="skip">Saltar si existe</option>
+                    <option value="overwrite-if-newer">Sobrescribir si mas nuevo</option>
+                </select>
+            </div>
+            </details>
+
+        <!-- Presets -->
+        <div class="presets-row" id="presetsRow">
+            <label class="preset-label">Presets</label>
+            <div class="preset-control">
+                <select id="presetSelect" onchange="loadPreset(this.value)">
+                    <option value="">-- Cargar preset --</option>
+                </select>
+                <button class="btn-icon btn-xs" type="button" onclick="openPresetModal()" title="Guardar preset">
+                    <svg viewBox="0 0 16 16"><path d="M8 1v10M4 9l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <button class="btn-icon btn-xs" type="button" onclick="deleteCurrentPreset()" title="Eliminar preset">
+                    <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+            <div class="action-row">
+                <button id="previewBtn" class="btn btn-secondary" type="button" onclick="doPreview()" title="Previsualizar archivos antes de procesar (Ctrl+P)">
+                    <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M11 11l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    Previsualizar
+                </button>
+                <button id="startBtn" class="btn btn-primary" type="button" onclick="startScan()" title="Iniciar escaneo (Ctrl+Enter)">
+                    <svg viewBox="0 0 16 16"><polygon points="4,2 14,8 4,14"/></svg>
+                    Iniciar escaneo
+                </button>
+            </div>
+            <button id="stopBtn" class="btn btn-danger hidden" type="button" onclick="stopScan()">
+                <svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
+                Detener
+            </button>
+        </div>
+    </aside>
+
+    <!-- === MAIN === -->
+    <main class="main">
+        <!-- Stats -->
+        <div class="stat-row">
+            <div class="stat stat-ok">
+                <span class="stat-num" id="statProcessed">0</span>
+                <span class="stat-label">Procesados</span>
+            </div>
+            <div class="stat stat-skip">
+                <span class="stat-num" id="statSkipped">0</span>
+                <span class="stat-label">Omitidos</span>
+            </div>
+            <div class="stat stat-err">
+                <span class="stat-num" id="statErrors">0</span>
+                <span class="stat-label">Errores</span>
+            </div>
+        </div>
+
+        <!-- Progress -->
+        <div class="progress-section">
+            <div class="progress-header">
+                <span class="progress-label">Progreso</span>
+                <span class="progress-pct" id="progressText">0%</span>
+            </div>
+            <div class="progress-track">
+                <div class="progress-fill" id="progressBar"></div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <nav class="tabs">
+            <button class="tab-btn active" type="button" onclick="switchTab('console')">Consola</button>
+            <button class="tab-btn" type="button" onclick="switchTab('history')">Historial</button>
+            <button class="tab-btn" type="button" onclick="switchTab('report')">Reporte</button>
+        </nav>
+
+        <!-- Console tab -->
+        <div id="consoleTab" class="tab-content active">
+            <div class="console" id="logContent">
+                <div class="log-line system">&gt; Sistema listo. Esperando instrucciones...</div>
+            </div>
+        </div>
+
+        <!-- History tab -->
+        <div id="historyTab" class="tab-content">
+            <div class="table-toolbar">
+                <span id="historyInfo" class="table-meta"></span>
+                <button class="btn btn-ghost btn-xs" type="button" onclick="loadHistory(1)">Refrescar</button>
+            </div>
+            <div class="table-wrap">
+                <table id="historyTable">
+                    <thead>
+                        <tr>
+                            <th>Fecha</th>
+                            <th>Archivo</th>
+                            <th>Accion</th>
+                            <th>Estado</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="pagination" id="historyPagination"></div>
+        </div>
+
+        <!-- Report tab -->
+        <div id="reportTab" class="tab-content">
+            <div class="report-grid">
+                <div class="report-card">
+                    <h3>Por gestor</h3>
+                    <div class="table-wrap">
+                        <table id="reportGestorTable">
+                            <thead>
+                                <tr>
+                                    <th>Gestor</th>
+                                    <th>Total</th>
+                                    <th>Copias</th>
+                                    <th>Movidos</th>
+                                    <th>Skip</th>
+                                    <th>Err</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="report-card">
+                    <h3>Por proyecto</h3>
+                    <div class="table-wrap">
+                        <table id="reportProyectoTable">
+                            <thead>
+                                <tr>
+                                    <th>Gestor</th>
+                                    <th>Proyecto</th>
+                                    <th>Total</th>
+                                    <th>Err</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- === BROWSE MODAL === -->
+<div id="browseModal" class="modal-overlay">
+    <div class="modal">
+        <div class="modal-bar">
+            <h2>Seleccionar carpeta</h2>
+            <button class="btn-icon" type="button" onclick="closeBrowseModal()" title="Cerrar (Escape)">
+                <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+            </button>
+        </div>
+        <div class="modal-path">
+            <button id="upBtn" class="btn-icon" type="button" title="Subir">
+                <svg viewBox="0 0 16 16"><path d="M3 10l5-5 5 5"/></svg>
+            </button>
+            <input type="text" id="currentPath" readonly spellcheck="false">
+        </div>
+        <div class="modal-list" id="folderList"></div>
+        <div class="modal-actions">
+            <button class="btn btn-ghost" type="button" onclick="closeBrowseModal()">Cancelar</button>
+            <button class="btn btn-primary" type="button" onclick="selectCurrentFolder()">Usar esta carpeta</button>
+        </div>
+    </div>
+</div>
+
+<!-- === PREVIEW MODAL === -->
+<div id="previewModal" class="modal-overlay">
+    <div class="modal modal-lg">
+        <div class="modal-bar">
+            <h2>Previsualizacion</h2>
+            <button class="btn-icon" type="button" onclick="closePreviewModal()" title="Cerrar (Escape)">
+                <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+        </div>
+        <div class="preview-content" id="previewContent">
+            <div class="preview-loading">Analizando carpeta...</div>
+        </div>
+    </div>
+</div>
+
+<!-- === PRESET MODAL === -->
+<div id="presetModal" class="modal-overlay">
+    <div class="modal modal-sm">
+        <div class="modal-bar">
+            <h2>Guardar preset</h2>
+            <button class="btn-icon" type="button" onclick="closePresetModal()" title="Cerrar">
+                <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+        </div>
+        <div class="preset-form">
+            <div class="field">
+                <label for="presetName">Nombre del preset</label>
+                <input type="text" id="presetName" placeholder="Mi preset" spellcheck="false">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" type="button" onclick="closePresetModal()">Cancelar</button>
+                <button class="btn btn-primary" type="button" onclick="savePreset()">Guardar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- === TOAST CONTAINER === -->
+<div id="toastContainer" class="toast-container"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

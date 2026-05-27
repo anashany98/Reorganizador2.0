@@ -1,4 +1,4 @@
-"""SQLite sink implementation."""
+﻿"""SQLite sink implementation."""
 
 from __future__ import annotations
 
@@ -13,28 +13,7 @@ from .. import config
 
 LOGGER = logging.getLogger(__name__)
 
-
-SQL_COLUMNS = [
-    "file_name",
-    "extension",
-    "mime_type",
-    "size_bytes",
-    "created_time",
-    "modified_time",
-    "accessed_time",
-    "hash_algo",
-    "hash_value",
-    "hash_value_dst",
-    "hash_verified",
-    "src_path",
-    "dst_path",
-    "gestor",
-    "proyecto",
-    "action",
-    "action_status",
-    "error",
-    "verified",
-]
+SQL_COLUMNS = config.SQL_COLUMNS
 
 
 class SQLiteSink:
@@ -47,6 +26,8 @@ class SQLiteSink:
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         self._ensure_schema()
+        self._conn.execute('PRAGMA journal_mode=WAL')
+        self._conn.execute('PRAGMA synchronous=NORMAL')
 
     def _ensure_schema(self) -> None:
         cursor = self._conn.cursor()
@@ -82,6 +63,18 @@ class SQLiteSink:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_files_dst_path ON files(dst_path)"
         )
+        
+        # Tabla de checkpoints para resume tras interrupcion.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                src_path TEXT UNIQUE,
+                saved_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        self._conn.commit()
         self._conn.commit()
 
         # Comprueba que las columnas nuevas existan en bases antiguas.
@@ -177,6 +170,20 @@ class SQLiteSink:
         )
         return {row["src_path"]: row for row in cursor.fetchall()}
 
+    
+    def save_checkpoint(self, src_path: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO checkpoints (src_path) VALUES (?)",
+                (src_path,),
+            )
+            self._conn.commit()
+
+    def get_checkpoint(self) -> Optional[str]:
+        cursor = self._conn.cursor()
+        cursor.execute("SELECT src_path FROM checkpoints ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        return row["src_path"] if row else None
     def close(self) -> None:
         with self._lock:
             self._conn.close()

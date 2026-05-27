@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from enum import Enum
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -21,16 +22,70 @@ if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 # -----------------------------------------------------------------------------
+# .env support (opcional)
+# -----------------------------------------------------------------------------
+
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+    if _ENV_FILE.exists():
+        load_dotenv(_ENV_FILE)
+    del _ENV_FILE
+except ImportError:
+    pass  # python-dotenv no instalado, se ignoran los archivos .env
+
+# -----------------------------------------------------------------------------
 # General constants
 # -----------------------------------------------------------------------------
 
 OS_CPU_COUNT = os.cpu_count() or 4
-DEFAULT_THREADS: int = min(8, OS_CPU_COUNT)
-DEFAULT_PROCESSES: int = max(1, min(4, OS_CPU_COUNT))
-CHUNK_SIZE: int = 1024 * 1024  # 1 MiB
-DEFAULT_HASH: str = "sha256"
-SUPPORTED_HASH_ALGOS = {"sha1", "sha256", "md5"}
+DEFAULT_THREADS: int = max(4, int(OS_CPU_COUNT * 0.75))
+DEFAULT_PROCESSES: int = max(2, int(OS_CPU_COUNT * 0.5))
+CHUNK_SIZE: int = 8 * 1024 * 1024  # 8 MiB
+DEFAULT_HASH: str = "xxhash"
+SUPPORTED_HASH_ALGOS = {"sha1", "sha256", "md5", "xxhash"}
 HASH_CACHE_TTL_SECONDS: int = 24 * 3600
+
+
+class OrganizeBy(str, Enum):
+    """Estrategias de organización en destino."""
+
+    FLAT = "flat"
+    TYPE = "type"
+    DATE = "date"
+    TYPE_DATE = "type-date"
+    HIERARCHICAL_TYPE_EXT = 'hierarchical-type-ext'
+    PROJECT_TYPE = 'project-type'
+
+    @classmethod
+    def choices(cls) -> list[str]:
+        return [member.value for member in cls]
+
+
+# Columnas compartidas entre los sinks SQLite y SQL Server.
+# Si se añade una columna nueva, solo hay que tocarla aquí.
+SQL_COLUMNS = [
+    "file_name",
+    "extension",
+    "mime_type",
+    "size_bytes",
+    "created_time",
+    "modified_time",
+    "accessed_time",
+    "hash_algo",
+    "hash_value",
+    "hash_value_dst",
+    "hash_verified",
+    "src_path",
+    "dst_path",
+    "gestor",
+    "proyecto",
+    "action",
+    "action_status",
+    "error",
+    "verified",
+]
 
 CSV_HEADERS = [
     "id",

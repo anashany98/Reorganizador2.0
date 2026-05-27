@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -20,15 +21,8 @@ from .sinks.sqlserver_sink import SqlServerSink
 LOGGER = logging.getLogger(__name__)
 
 
-# -----------------------------------------------------------------------------
-# Dataclasses and helpers
-# -----------------------------------------------------------------------------
-
-
 @dataclass(slots=True)
 class ProcessingOptions:
-    """Options controlling processing behaviour."""
-
     source_root: Path
     dest_root: Optional[Path] = None
     organize_by: str = "type-date"
@@ -39,12 +33,13 @@ class ProcessingOptions:
     verify_hash: bool = True
     threads: int = config.DEFAULT_THREADS
     processes: int = 0
+    conflict: str = "rename"
+    dedup: bool = False
+    resume: bool = False
 
 
 @dataclass(slots=True)
 class FileMetadata:
-    """Basic file metadata."""
-
     path: Path
     file_name: str
     extension: str
@@ -60,8 +55,6 @@ class FileMetadata:
 
 @dataclass(slots=True)
 class CacheEntry:
-    """Cached metadata snapshot."""
-
     hash_value: Optional[str] = None
     hash_algo: Optional[str] = None
     size_bytes: Optional[int] = None
@@ -85,8 +78,6 @@ class CacheEntry:
 
 @dataclass(slots=True)
 class ProcessingRecord:
-    """Result of processing a single file."""
-
     metadata: FileMetadata
     action: str
     action_status: str
@@ -126,14 +117,7 @@ class ProcessingRecord:
         }
 
 
-# -----------------------------------------------------------------------------
-# Cache loader
-# -----------------------------------------------------------------------------
-
-
 class MetadataCache:
-    """Aggregates existing metadata for incremental runs."""
-
     def __init__(self) -> None:
         self._entries: Dict[str, CacheEntry] = {}
         self._lock = threading.Lock()
@@ -141,10 +125,9 @@ class MetadataCache:
     def load_from_sqlite(self, sink: SQLiteSink) -> None:
         try:
             rows = sink.fetch_existing_cache()
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             LOGGER.warning("Unable to load SQLite cache: %s", exc)
             return
-
         for src_path, row in rows.items():
             data = dict(row)
             self._entries[src_path] = CacheEntry(
@@ -171,14 +154,14 @@ class MetadataCache:
                     entry = self._entries.get(src_path, CacheEntry())
                     entry.hash_value = entry.hash_value or row.get("hash_value")
                     entry.hash_algo = entry.hash_algo or row.get("hash_algo")
-                    entry.size_bytes = entry.size_bytes or _safe_int(row.get("size_bytes"))
-                    entry.modified_ts = entry.modified_ts or _parse_timestamp(row.get("modified_time"))
+                    entry.size_bytes = entry.size_bytes if entry.size_bytes is not None else _safe_int(row.get("size_bytes"))
+                    entry.modified_ts = entry.modified_ts if entry.modified_ts is not None else _parse_timestamp(row.get("modified_time"))
                     entry.hash_verified = entry.hash_verified or row.get("hash_verified")
                     entry.dest_path = entry.dest_path or row.get("dst_path")
                     entry.dest_hash = entry.dest_hash or row.get("hash_value_dst")
-                    entry.verified = entry.verified or row.get("verified") in {"1", "true", "True", "ok"}
+                    entry.verified = entry.verified if entry.verified is not False else (row.get("verified") in {"1", "true", "True", "ok"})
                     self._entries[src_path] = entry
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             LOGGER.warning("Unable to load CSV cache: %s", exc)
 
     def get(self, path: Path) -> Optional[CacheEntry]:
@@ -195,11 +178,6 @@ class MetadataCache:
             dest_hash=record.hash_value_dst,
             verified=record.verified,
         )
-
-
-# -----------------------------------------------------------------------------
-# Hash calculator
-# -----------------------------------------------------------------------------
 
 
 def _hash_worker(path_str: str, algorithm: str) -> file_utils.HashResult:
@@ -224,16 +202,12 @@ class HashCalculator:
             self._executor.shutdown(wait=True)
 
 
-# -----------------------------------------------------------------------------
-# File processor
-# -----------------------------------------------------------------------------
-
-
 class FileProcessor:
     def __init__(self, options: ProcessingOptions, cache: MetadataCache) -> None:
         self.options = options
         self.cache = cache
         self.hash_calculator = HashCalculator(options.hash_algorithm, options.processes)
+        self._dedup_map: dict[str, Path] = {}
 
     def gather_metadata(self, path: Path) -> FileMetadata:
         stats = path.stat()
@@ -254,7 +228,6 @@ class FileProcessor:
     def process_path(self, path: Path) -> ProcessingRecord:
         metadata = self.gather_metadata(path)
         cache_entry = self.cache.get(path)
-        # Determina el gestor y el proyecto a partir de la jerarquía de carpetas.
         gestor, proyecto = file_utils.extract_manager_project(
             path=path, source_root=self.options.source_root
         )
@@ -266,56 +239,48 @@ class FileProcessor:
         if self.options.dest_root:
             action = "move" if self.options.move_files else "copy"
             candidate = file_utils.build_destination_path(
-                src=path,
-                dest_root=self.options.dest_root,
+                src=path, dest_root=self.options.dest_root,
                 source_root=self.options.source_root,
-                mode=self.options.organize_by,
-                modified_time=metadata.mtime_ts,
+                mode=self.options.organize_by, modified_time=metadata.mtime_ts,
             )
-            dest_path = file_utils.ensure_unique_path(candidate)
+            dest_path = candidate
             dest_path_str = str(dest_path)
 
+        # --- Incremental skip ---
+        cached_dest_path = Path(cache_entry.dest_path) if cache_entry and cache_entry.dest_path else None
         should_skip = (
             self.options.incremental
             and not self.options.move_files
             and cache_entry is not None
-            and cache_entry.dest_path
-            and dest_path_str
-            and cache_entry.dest_path == dest_path_str
-            and Path(cache_entry.dest_path).exists()
+            and cached_dest_path is not None
+            and cached_dest_path.exists()
             and cache_entry.matches(metadata.size_bytes, metadata.mtime_ts, self.options.hash_algorithm)
         )
 
-        if should_skip:
-            # Devuelve el registro en caché si el destino sigue existente y no hubo cambios.
+        if should_skip and self.options.conflict != "overwrite":
+            dest_path = cached_dest_path
+            dest_path_str = cache_entry.dest_path
             record = ProcessingRecord(
-                metadata=metadata,
-                action="skip",
-                action_status="skipped",
+                metadata=metadata, action="skip", action_status="skipped",
                 hash_value=cache_entry.hash_value,
                 hash_algo=cache_entry.hash_algo or self.options.hash_algorithm,
                 hash_value_dst=cache_entry.dest_hash,
                 hash_verified=cache_entry.hash_verified or "cached",
-                dest_path=cache_entry.dest_path,
-                gestor=gestor,
-                proyecto=proyecto,
-                error=None,
-                verified=cache_entry.verified,
+                dest_path=cache_entry.dest_path, gestor=gestor, proyecto=proyecto,
+                error=None, verified=cache_entry.verified,
             )
             return record
 
+        # --- Hash ---
         use_cached_hash = (
             self.options.incremental
             and cache_entry is not None
             and cache_entry.matches(metadata.size_bytes, metadata.mtime_ts, self.options.hash_algorithm)
         )
-
         if use_cached_hash:
-            # Reutiliza el hash de la ejecución anterior para evitar releer el archivo.
             hash_result = file_utils.HashResult(
                 algorithm=cache_entry.hash_algo or self.options.hash_algorithm,
-                value=cache_entry.hash_value,
-                duration_seconds=0.0,
+                value=cache_entry.hash_value, duration_seconds=0.0,
             )
         else:
             hash_result = self.hash_calculator.compute(path)
@@ -328,79 +293,85 @@ class FileProcessor:
         action_status = "ok"
 
         if dest_path and action != "scan":
-            try:
-                if self.options.dry_run:
-                    LOGGER.info("[dry-run] %s -> %s", path, dest_path)
-                else:
-                    if self.options.move_files:
+            # --- Conflict resolution ---
+            if dest_path.exists() and file_utils.should_overwrite(
+                dest_path, metadata.mtime_ts, self.options.conflict
+            ):
+                dest_path.unlink(missing_ok=True)
+
+            if dest_path.exists() and self.options.conflict == "skip" and not self.options.move_files:
+                action = "skip"
+                action_status = "skipped"
+            elif not self.options.dry_run:
+                if dest_path.exists() and self.options.conflict == file_utils.ConflictStrategy.RENAME:
+                    dest_path = file_utils.ensure_unique_path(dest_path)
+                    dest_path_str = str(dest_path)
+                try:
+                    # --- Dedup via hardlink ---
+                    if (
+                        self.options.dedup
+                        and not self.options.move_files
+                        and hash_result.value
+                        and hash_result.value in self._dedup_map
+                    ):
+                        existing_dest = self._dedup_map[hash_result.value]
+                        try:
+                            file_utils.safe_makedirs(dest_path.parent)
+                            os.link(str(existing_dest), file_utils._win_path(dest_path))
+                            dedup_action = "hardlink"
+                        except OSError:
+                            file_utils.copy_file(path, dest_path)
+                            dedup_action = "copy"
+                    elif self.options.move_files:
                         file_utils.move_file(path, dest_path)
+                        dedup_action = "move"
                     else:
                         file_utils.copy_file(path, dest_path)
+                        dedup_action = "copy"
 
-                if (
-                    not self.options.dry_run
-                    and not self.options.move_files
-                    and self.options.verify_hash
-                    and hash_result.value
-                ):
-                    # Solo verifica la copia cuando hace falta para evitar rehacer el hash.
-                    needs_verification = not (
-                        cache_entry
-                        and cache_entry.dest_path == dest_path_str
-                        and cache_entry.verified
-                    )
-                    if needs_verification:
-                        match = file_utils.verify_hash_match(
-                            hash_result.value, dest_path, hash_result.algorithm
-                        )
-                        if match:
-                            hash_value_dst = hash_result.value
-                            hash_verified = "ok"
-                            verified_flag = True
-                        else:
-                            hash_verified = "mismatch"
-                            verified_flag = False
-                    else:
-                        hash_verified = cache_entry.hash_verified or "cached"
-                        hash_value_dst = cache_entry.dest_hash
-                        verified_flag = cache_entry.verified
+                    if dedup_action != "move":
+                        action = dedup_action
 
-            except Exception as exc:
-                error = str(exc)
-                action_status = "error"
-                LOGGER.exception("Failed processing %s: %s", path, exc)
+                except Exception as exc:
+                    error = str(exc)
+                    action_status = "error"
+                    LOGGER.exception("Failed processing %s: %s", path, exc)
 
         if dest_path is None:
             hash_verified = "n/a"
+        elif self.options.dry_run:
+            hash_verified = "dry-run"
+        elif action_status == "ok" and self.options.verify_hash and hash_result.value and dest_path.exists():
+            dst_result = self.hash_calculator.compute(dest_path)
+            hash_value_dst = dst_result.value
+            verified_flag = hash_value_dst == hash_result.value
+            hash_verified = "ok" if verified_flag else "mismatch"
+            if not verified_flag:
+                action_status = "error"
+                error = "Hash verification failed: destination hash does not match source hash."
+        elif action_status == "ok" and self.options.verify_hash and self.options.hash_algorithm == "none":
+            hash_verified = "n/a"
+        elif action_status == "ok" and not self.options.verify_hash:
+            hash_verified = "skipped"
 
         record = ProcessingRecord(
-            metadata=metadata,
-            action=action,
-            action_status=action_status,
-            hash_value=hash_result.value,
-            hash_algo=hash_result.algorithm,
-            hash_value_dst=hash_value_dst,
-            hash_verified=hash_verified,
-            dest_path=dest_path_str,
-            gestor=gestor,
-            proyecto=proyecto,
-            error=error,
-            verified=verified_flag,
+            metadata=metadata, action=action, action_status=action_status,
+            hash_value=hash_result.value, hash_algo=hash_result.algorithm,
+            hash_value_dst=hash_value_dst, hash_verified=hash_verified,
+            dest_path=dest_path_str, gestor=gestor, proyecto=proyecto,
+            error=error, verified=verified_flag,
             duration_hash=hash_result.duration_seconds,
         )
 
         if error is None:
             self.cache.update(record)
+            if self.options.dedup and hash_result.value and dest_path:
+                self._dedup_map[hash_result.value] = dest_path
 
         return record
 
     def shutdown(self) -> None:
         self.hash_calculator.shutdown()
-
-
-# -----------------------------------------------------------------------------
-# Sink manager
-# -----------------------------------------------------------------------------
 
 
 class SinkManager:
@@ -436,6 +407,10 @@ class SinkManager:
             self.csv_sink.append_records(rows)
         if self.sqlite_sink:
             self.sqlite_sink.insert_records(rows)
+            # Checkpoint para resume tras interrupcion.
+            last_row = rows[-1]
+            if last_row.get('src_path'):
+                self.sqlite_sink.save_checkpoint(str(last_row['src_path']))
         if self.sqlserver_sink:
             self.sqlserver_sink.insert_records(rows)
 
@@ -449,11 +424,6 @@ class SinkManager:
             self.sqlserver_sink.close()
         if self.sqlite_sink:
             self.sqlite_sink.close()
-
-
-# -----------------------------------------------------------------------------
-# Batch processing
-# -----------------------------------------------------------------------------
 
 
 class BatchProcessor:
@@ -473,6 +443,8 @@ class BatchProcessor:
             for future in as_completed(future_map):
                 record = future.result()
                 self.sink_manager.append(record)
+                if record.action == "move" and record.action_status == "ok":
+                    self.sink_manager.flush()
                 if progress_callback:
                     progress_callback(record)
                 yield record
@@ -480,11 +452,6 @@ class BatchProcessor:
     def close(self) -> None:
         self.file_processor.shutdown()
         self.sink_manager.close()
-
-
-# -----------------------------------------------------------------------------
-# Utilities
-# -----------------------------------------------------------------------------
 
 
 def _parse_timestamp(value: Optional[str]) -> Optional[float]:

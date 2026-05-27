@@ -16,27 +16,7 @@ from .. import config
 
 LOGGER = logging.getLogger(__name__)
 
-SQL_COLUMNS = [
-    "file_name",
-    "extension",
-    "mime_type",
-    "size_bytes",
-    "created_time",
-    "modified_time",
-    "accessed_time",
-    "hash_algo",
-    "hash_value",
-    "hash_value_dst",
-    "hash_verified",
-    "src_path",
-    "dst_path",
-    "gestor",
-    "proyecto",
-    "action",
-    "action_status",
-    "error",
-    "verified",
-]
+SQL_COLUMNS = config.SQL_COLUMNS
 
 
 class SqlServerSink:

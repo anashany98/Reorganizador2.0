@@ -1,10 +1,12 @@
-"""Command line interface for extractor v2."""
+﻿"""Command line interface for extractor v2."""
 
 from __future__ import annotations
 
 import argparse
 import logging
 import sqlite3
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
@@ -34,6 +36,7 @@ from .processor import (
 from .sinks.csv_sink import CsvSink
 from .sinks.sqlite_sink import SQLiteSink
 from .sinks.sqlserver_sink import SqlServerSink
+from .sinks import excel_audit
 from .watchdog_agent import WatchdogAgent
 
 console = Console()
@@ -67,7 +70,7 @@ class ProcessingStats:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="extractor_v2",
+        prog="reorganizador_v2",
         description="Organiza archivos, extrae metadatos y sincroniza hashes.",
     )
     parser.add_argument(
@@ -87,8 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument("--dest", help="Carpeta destino para organizar/copiar.")
     scan_parser.add_argument(
         "--organize-by",
-        default="type-date",
-        choices=["flat", "type", "date", "type-date"],
+        default=config.OrganizeBy.TYPE_DATE.value,
+        choices=config.OrganizeBy.choices(),
         help="Estrategia de organización en destino.",
     )
     scan_parser.add_argument(
@@ -142,8 +145,30 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument(
         "--batch-size",
         type=int,
-        default=50,
+        default=500,
         help="Lote de escritura en sinks.",
+    )
+    scan_parser.add_argument("--excel-out", help="Ruta del Excel de auditoria a generar tras el escaneo.")
+    
+    scan_parser.add_argument(
+        "--conflict",
+        default="rename",
+        choices=file_utils.ConflictStrategy.choices(),
+        help="Estrategia cuando el destino ya existe.",
+    )
+    scan_parser.add_argument(
+        "--dedup",
+        action="store_true",
+        help="Crear hardlinks en vez de copias para archivos duplicados.",
+    )
+    scan_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Retomar desde el ultimo archivo procesado (requiere SQLite).",
+    )
+    scan_parser.add_argument(
+        "--projects",
+        help="Filtrar por números de proyecto (archivo CSV/TXT o lista separada por comas).",
     )
 
     # watch command
@@ -155,8 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--dest", help="Carpeta destino para copias.")
     watch_parser.add_argument(
         "--organize-by",
-        default="type-date",
-        choices=["flat", "type", "date", "type-date"],
+        default=config.OrganizeBy.TYPE_DATE.value,
+        choices=config.OrganizeBy.choices(),
         help="Estrategia de organización en destino.",
     )
     watch_parser.add_argument(
@@ -187,6 +212,12 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--sqlserver-conn")
 
     # verify command
+    
+    preview_parser = subparsers.add_parser("preview", help="Pre-escaneo informativo sin procesar archivos.")
+    preview_parser.add_argument("--source", required=True, help="Carpeta origen a explorar.")
+    preview_parser.add_argument("--projects", help="Filtrar por proyecto para el preview.")
+    preview_parser.add_argument("--sqlite-db", default="metadatos.db", help="BD SQLite para cache incremental.")
+
     verify_parser = subparsers.add_parser(
         "verify",
         help="Verifica coincidencia de hashes entre origen y copia.",
@@ -236,6 +267,9 @@ def run_scan(args: argparse.Namespace) -> None:
         hash_algorithm=args.hash_algo,
         incremental=not args.no_incremental,
         verify_hash=not args.no_verify,
+        conflict=args.conflict,
+        dedup=args.dedup,
+        resume=args.resume,
         threads=max(1, args.threads),
         processes=max(0, args.processes),
     )
@@ -259,9 +293,49 @@ def run_scan(args: argparse.Namespace) -> None:
         sqlserver_sink=sqlserver_sink,
         batch_size=args.batch_size,
     )
+    
+    # Bloqueo de escaneo concurrente.
+    lock_path = Path(args.sqlite_db).with_suffix(".lock") if args.sqlite_db else None
+    if lock_path:
+        if lock_path.exists():
+            try:
+                pid = int(lock_path.read_text().strip())
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.OpenProcess(0x0400, False, pid)
+                if handle:
+                    kernel32.CloseHandle(handle)
+                    console.print("[red]Ya hay un escaneo en curso (PID {})[/red]".format(pid))
+                    return
+            except Exception:
+                pass
+            lock_path.unlink(missing_ok=True)
+        lock_path.write_text(str(os.getpid()))
+
     batch_processor = BatchProcessor(processor, sink_manager)
 
     files = [path for path in file_utils.iter_files(source)]
+
+    # 
+    if args.resume and sqlite_sink:
+        checkpoint = sqlite_sink.get_checkpoint()
+        if checkpoint:
+            checkpoint_path = Path(checkpoint)
+            before = len(files)
+            try:
+                idx = files.index(checkpoint_path)
+                files = files[idx:]
+            except ValueError:
+                pass  # El archivo del checkpoint ya no existe, procesar todo.
+    # Filtro por numero de proyecto (opcional).
+    project_filter = file_utils.parse_project_filter(args.projects)
+    if project_filter:
+        before = len(files)
+        files = [p for p in files if file_utils.path_matches_project_filter(p, source, project_filter)]
+        console.print(
+            f"[dim]Filtro de proyectos: {before} → {len(files)} archivos "
+            f"({len(project_filter)} proyectos)[/dim]"
+        )
     stats = ProcessingStats()
 
     progress = Progress(
@@ -273,21 +347,185 @@ def run_scan(args: argparse.Namespace) -> None:
         transient=True,
     )
 
-    with progress:
-        task_id = progress.add_task("Procesando archivos", total=len(files))
+    failed_records = []
+    try:
+        with progress:
+            task_id = progress.add_task("Procesando archivos", total=len(files))
 
-        def _on_record(rec: ProcessingRecord) -> None:
-            stats.update(rec)
-            progress.advance(task_id)
+            def _on_record(rec: ProcessingRecord) -> None:
+                stats.update(rec)
+                progress.advance(task_id)
 
-        try:
+            # --- Reintento automatico de fallos ---
             for _record in batch_processor.process_paths(files, progress_callback=_on_record):
-                pass
-        finally:
-            batch_processor.close()
+                if _record.action_status == "error":
+                    failed_records.append(_record)
+
+            if failed_records:
+                console.print(f"[yellow]Reintentando {len(failed_records)} archivos fallidos...[/yellow]")
+                for attempt in range(3):
+                    still_failed = []
+                    for rec in failed_records:
+                        try:
+                            retry_record = processor.process_path(rec.metadata.path)
+                            sink_manager.append(retry_record)
+                            if retry_record.action_status == "ok":
+                                stats.errors = max(0, stats.errors - 1)
+                                stats.update(retry_record)
+                            else:
+                                still_failed.append(retry_record)
+                        except Exception:
+                            still_failed.append(rec)
+                    failed_records = still_failed
+                    if not failed_records:
+                        break
+                    time.sleep(2 ** attempt)
+                if failed_records:
+                    console.print(f"[red]{len(failed_records)} archivos no pudieron procesarse tras 3 intentos.[/red]")
+    finally:
+        batch_processor.close()
+        # --- Limpiar lock ---
+        if lock_path and lock_path.exists():
+            lock_path.unlink(missing_ok=True)
+
+    # --- Notificacion sonora ---
+    try:
+        import winsound
+        if failed_records and len(failed_records) > 0:
+            winsound.MessageBeep(0x10)  # Error
+        else:
+            winsound.MessageBeep(0x00)  # OK
+    except Exception:
+        pass
 
     console.print(stats.as_table())
 
+    if args.excel_out:
+        try:
+            excel_path = excel_audit.generate_audit_excel(
+                db_path=Path(args.sqlite_db),
+                output_path=Path(args.excel_out),
+                source_label=str(source),
+                dest_label=str(dest) if dest else '',
+            )
+            console.print(f'[green]Excel de auditoria guardado en[/green] {excel_path}')
+        except Exception as exc:
+            console.print(f'[yellow]No se pudo generar el Excel:[/yellow] {exc}')
+
+
+
+def run_preview(args: argparse.Namespace) -> None:
+    """Muestra estadisticas del origen sin procesar archivos."""
+    source = Path(args.source).resolve()
+    if not source.exists():
+        raise FileNotFoundError(f"La ruta origen no existe: {source}")
+
+    console.print(f"[bold cyan]Pre-escaneo de[/bold cyan] {source}")
+    console.print()
+
+    files = list(file_utils.iter_files(source))
+    total_files = len(files)
+    if total_files == 0:
+        console.print("[yellow]No se encontraron archivos.[/yellow]")
+        return
+
+    # Tamaño total
+    total_bytes = 0
+    for f in files:
+        try:
+            total_bytes += f.stat().st_size
+        except OSError:
+            pass
+
+    # Extensiones
+    ext_count: dict[str, int] = {}
+    for f in files:
+        ext = f.suffix.lower() or "(sin ext)"
+        ext_count[ext] = ext_count.get(ext, 0) + 1
+
+    # Gestores y proyectos
+    gestor_count: dict[str, int] = {}
+    proyecto_count: dict[str, int] = {}
+    for f in files:
+        gestor, proyecto = file_utils.extract_manager_project(f, source)
+        if gestor:
+            gestor_count[gestor] = gestor_count.get(gestor, 0) + 1
+        if proyecto:
+            proyecto_count[proyecto] = proyecto_count.get(proyecto, 0) + 1
+
+    # Incremental: cuantos ya estan en cache
+    already = 0
+    db_path = Path(args.sqlite_db) if args.sqlite_db else None
+    if db_path and db_path.exists():
+        import sqlite3
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+            cursor.execute("SELECT src_path FROM files")
+            cached = {row[0] for row in cursor.fetchall()}
+            already = sum(1 for f in files if str(f) in cached)
+            conn.close()
+        except Exception:
+            pass
+
+    # Filtro de proyectos
+    project_filter = file_utils.parse_project_filter(args.projects)
+    if project_filter:
+        files = [f for f in files if file_utils.path_matches_project_filter(f, source, project_filter)]
+        console.print(f"[dim]Filtro de proyectos activo: {len(project_filter)} proyectos[/dim]")
+        console.print()
+
+    # Estimacion de tiempo
+    new_files = total_files - already
+    est_seconds = new_files * 0.15  # ~150ms por archivo con xxhash + NVMe
+    est_min = int(est_seconds // 60)
+    est_sec = int(est_seconds % 60)
+
+    # --- Tabla resumen ---
+    table = Table(title="Resumen del pre-escaneo", title_style="bold cyan")
+    table.add_column("Metrica", style="dim")
+    table.add_column("Valor", justify="right")
+
+    table.add_row("Archivos totales", str(total_files))
+    table.add_row("Ya procesados (incremental)", str(already))
+    table.add_row("Pendientes", str(new_files))
+    table.add_row("Tamaño total", f"{total_bytes / (1024**3):.1f} GB" if total_bytes > 1024**3 else f"{total_bytes / (1024**2):.0f} MB")
+    table.add_row("Extensiones unicas", str(len(ext_count)))
+    table.add_row("Gestores detectados", str(len(gestor_count)))
+    table.add_row("Proyectos unicos", str(len(proyecto_count)))
+    table.add_row("Tiempo estimado", f"{est_min} min {est_sec} s" if est_min > 0 else f"{est_sec} s")
+
+    console.print(table)
+    console.print()
+
+    # Top extensiones
+    if ext_count:
+        ext_table = Table(title="Top extensiones")
+        ext_table.add_column("Extension")
+        ext_table.add_column("Archivos", justify="right")
+        for ext, count in sorted(ext_count.items(), key=lambda x: -x[1])[:10]:
+            ext_table.add_row(ext, str(count))
+        console.print(ext_table)
+        console.print()
+
+    # Top gestores
+    if gestor_count:
+        g_table = Table(title="Top gestores")
+        g_table.add_column("Gestor")
+        g_table.add_column("Archivos", justify="right")
+        for gestor, count in sorted(gestor_count.items(), key=lambda x: -x[1])[:15]:
+            g_table.add_row(gestor, str(count))
+        console.print(g_table)
+        console.print()
+
+    # Top proyectos
+    if proyecto_count:
+        p_table = Table(title="Top proyectos")
+        p_table.add_column("Proyecto")
+        p_table.add_column("Archivos", justify="right")
+        for proy, count in sorted(proyecto_count.items(), key=lambda x: -x[1])[:15]:
+            p_table.add_row(proy, str(count))
+        console.print(p_table)
 
 def run_watch(args: argparse.Namespace) -> None:
     """Mantiene una monitorización continua del origen y replica cambios en destino."""
@@ -482,7 +720,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "scan":
+        if args.command == 'preview':
+            run_preview(args)
+        elif args.command == 'scan':
             run_scan(args)
         elif args.command == "watch":
             run_watch(args)
@@ -490,6 +730,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             run_verify(args)
         else:
             parser.print_help()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupción recibida. Cerrando limpiamente…[/yellow]")
     except Exception as exc:
         console.print(f"[red]Error:[/red] {exc}")
         logging.getLogger(__name__).exception("Fallo en la ejecución principal")
@@ -498,3 +740,4 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
 if __name__ == "__main__":
     main()
+
