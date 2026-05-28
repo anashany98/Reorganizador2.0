@@ -19,7 +19,7 @@ WEB_DB_PATH = PROJECT_ROOT / "web_metadatos.db"
 # Allow importing the package when the server is launched directly.
 sys.path.append(str(PROJECT_ROOT))
 
-from reorganizador_v2 import config as app_config, file_utils
+from reorganizador_v2 import config as app_config, factusol_mapping, file_utils
 from reorganizador_v2.config import OrganizeBy
 from reorganizador_v2.processor import (
     BatchProcessor,
@@ -48,6 +48,10 @@ class JobState:
         self.skipped = 0
         self.errors = 0
         self.current_file = ""
+        self.match_ok = 0
+        self.match_sin_numero = 0
+        self.match_no_encontrado = 0
+        self.match_ambiguo = 0
         self.lock = threading.Lock()
         self.cancel_event = threading.Event()
 
@@ -59,6 +63,10 @@ class JobState:
             self.skipped = 0
             self.errors = 0
             self.current_file = ""
+            self.match_ok = 0
+            self.match_sin_numero = 0
+            self.match_no_encontrado = 0
+            self.match_ambiguo = 0
             self.cancel_event.clear()
 
     def set_preparing(self) -> None:
@@ -69,6 +77,10 @@ class JobState:
             self.skipped = 0
             self.errors = 0
             self.current_file = "Analizando archivos..."
+            self.match_ok = 0
+            self.match_sin_numero = 0
+            self.match_no_encontrado = 0
+            self.match_ambiguo = 0
 
     def start(self, total: int) -> None:
         with self.lock:
@@ -84,6 +96,15 @@ class JobState:
                 self.skipped += 1
             else:
                 self.processed += 1
+            if record.match_status:
+                if record.match_status.startswith("OK_"):
+                    self.match_ok += 1
+                elif record.match_status == "SIN_NUMERO_PRESUPUESTO":
+                    self.match_sin_numero += 1
+                elif record.match_status == "NO_ENCONTRADO_EN_EXCEL":
+                    self.match_no_encontrado += 1
+                elif record.match_status == "AMBIGUO":
+                    self.match_ambiguo += 1
 
     def finish(self) -> None:
         with self.lock:
@@ -104,6 +125,10 @@ class ScanConfig(BaseModel):
     min_size_mb: float = 0
     extensions: str = ""
     project_filter: str = ""
+    mapping_excel: str = ""
+    years: str = ""
+    unmatched_dir: str = "_REVISION"
+    require_budget_match: bool = False
     threads: int = 0
     processes: int = 0
     conflict: str = 'rename'
@@ -111,6 +136,12 @@ class ScanConfig(BaseModel):
 
 
 def _build_processing_options(config_data: ScanConfig, source: Path, dest: Path | None) -> ProcessingOptions:
+    factusol_index = None
+    if config_data.organize_by == OrganizeBy.FACTUSOL_CLIENT_BUDGET:
+        if not config_data.mapping_excel:
+            raise ValueError("El flujo FactuSOL requiere seleccionar el Excel simplificado.")
+        factusol_index = factusol_mapping.load_mapping(Path(config_data.mapping_excel))
+
     return ProcessingOptions(
         source_root=source,
         dest_root=dest,
@@ -122,6 +153,10 @@ def _build_processing_options(config_data: ScanConfig, source: Path, dest: Path 
         verify_hash=not config_data.dry_run,
         threads=config_data.threads or app_config.DEFAULT_THREADS,
         processes=config_data.processes or app_config.DEFAULT_PROCESSES,
+        factusol_index=factusol_index,
+        allowed_years=_parse_years(config_data.years),
+        unmatched_dir=config_data.unmatched_dir or "_REVISION",
+        require_budget_match=config_data.require_budget_match,
         conflict=config_data.conflict,
         dedup=config_data.dedup,
     )
@@ -289,6 +324,12 @@ async def get_status() -> dict:
                 "skipped": job_state.skipped,
                 "errors": job_state.errors,
             },
+            "match_counters": {
+                "OK": job_state.match_ok,
+                "SIN_NUMERO_PRESUPUESTO": job_state.match_sin_numero,
+                "NO_ENCONTRADO_EN_EXCEL": job_state.match_no_encontrado,
+                "AMBIGUO": job_state.match_ambiguo,
+            },
         }
 
 
@@ -321,6 +362,15 @@ async def get_history(page: int = 1, page_size: int = 50) -> dict:
                     action_status,
                     gestor,
                     proyecto,
+                    year,
+                    presupuesto_detectado,
+                    cliente,
+                    sede_hotel_direccion,
+                    referencia,
+                    tipo_documento,
+                    match_status,
+                    match_confidence,
+                    dst_path,
                     src_path
                 FROM files
                 ORDER BY id DESC
@@ -424,7 +474,14 @@ async def download_audit():
 
 
 @app.get("/api/preview")
-async def preview_source(source: str = "", projects: str = "") -> dict:
+async def preview_source(
+    source: str = "",
+    projects: str = "",
+    mapping_excel: str = "",
+    years: str = "",
+    dest: str = "",
+    unmatched_dir: str = "_REVISION",
+) -> dict:
     """Pre-escaneo informativo sin procesar archivos."""
     from pathlib import Path
     import sqlite3
@@ -475,7 +532,7 @@ async def preview_source(source: str = "", projects: str = "") -> dict:
         except Exception:
             pass
 
-    return {
+    result = {
         "total_files": total,
         "processed_already": already,
         "pending": max(0, total - already),
@@ -484,6 +541,88 @@ async def preview_source(source: str = "", projects: str = "") -> dict:
         "gestores": dict(sorted(gestor_count.items(), key=lambda x: -x[1])[:15]),
         "proyectos": dict(sorted(proyecto_count.items(), key=lambda x: -x[1])[:15]),
     }
+    if mapping_excel:
+        result.update(_build_factusol_preview(all_files, src, mapping_excel, years, dest, unmatched_dir))
+    return result
+
+
+def _parse_years(raw: str | None) -> set[str] | None:
+    if not raw or not raw.strip():
+        return None
+    years = {item.strip() for item in raw.split(",") if item.strip()}
+    return years or None
+
+
+def _build_factusol_preview(
+    files: list[Path],
+    source_root: Path,
+    mapping_excel: str,
+    years: str,
+    dest: str,
+    unmatched_dir: str,
+) -> dict:
+    index = factusol_mapping.load_mapping(Path(mapping_excel))
+    allowed_years = _parse_years(years)
+    dest_root = Path(dest).resolve() if dest else Path("DESTINO").resolve()
+    counters = {
+        "OK": 0,
+        "SIN_NUMERO_PRESUPUESTO": 0,
+        "NO_ENCONTRADO_EN_EXCEL": 0,
+        "AMBIGUO": 0,
+        "ERRORES": 0,
+    }
+    items = []
+    for file_path in files[:500]:
+        try:
+            match = factusol_mapping.resolve_budget_match(
+                path=file_path,
+                mapping_index=index,
+                allowed_years=allowed_years,
+            )
+            match.tipo_documento = factusol_mapping.categorize_document_type(file_path)
+            dst_path = factusol_mapping.build_factusol_client_budget_destination_path(
+                src=file_path,
+                dest_root=dest_root,
+                source_root=source_root,
+                match_result=match,
+                unmatched_dir=unmatched_dir or "_REVISION",
+            )
+            if match.status.startswith("OK_"):
+                counters["OK"] += 1
+            elif match.status in counters:
+                counters[match.status] += 1
+            items.append(
+                {
+                    "file_name": file_path.name,
+                    "src_path": str(file_path),
+                    "presupuesto_detectado": match.presupuesto_detectado or "",
+                    "cliente": match.cliente,
+                    "sede_hotel_direccion": match.sede_hotel_direccion,
+                    "referencia": match.referencia,
+                    "tipo_documento": match.tipo_documento,
+                    "match_status": match.status,
+                    "match_confidence": round(match.confidence, 4),
+                    "dst_path": str(dst_path),
+                }
+            )
+        except Exception as exc:
+            counters["ERRORES"] += 1
+            items.append(
+                {
+                    "file_name": file_path.name,
+                    "src_path": str(file_path),
+                    "presupuesto_detectado": "",
+                    "cliente": "",
+                    "sede_hotel_direccion": "",
+                    "referencia": "",
+                    "tipo_documento": "",
+                    "match_status": "ERROR",
+                    "match_confidence": 0,
+                    "dst_path": "",
+                    "error": str(exc),
+                }
+            )
+    return {"items": items, "match_counters": counters}
 
 def main() -> None:
     import uvicorn

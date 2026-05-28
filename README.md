@@ -6,7 +6,7 @@ Herramienta local para copiar o mover archivos desde una carpeta origen hacia un
 
 - Recorre una carpeta origen de forma recursiva.
 - Copia o mueve archivos a destino.
-- Mantiene la jerarquia original o reorganiza por tipo, fecha, tipo-fecha, categoria o proyecto.
+- Mantiene la jerarquia original o reorganiza por tipo, fecha, tipo-fecha, categoria, proyecto o mapping FactuSOL.
 - Extrae metadatos basicos: nombre, extension, MIME, tamaño, fechas, hashes y rutas.
 - Detecta gestor y numero de proyecto a partir de rutas tipo `Gestores/2025/MAR/250076/...`.
 - Evita repetir trabajo con modo incremental.
@@ -81,9 +81,13 @@ Opciones utiles:
 
 - `--dry-run`: simula sin copiar ni mover.
 - `--move`: mueve archivos en vez de copiarlos.
-- `--organize-by`: `flat`, `type`, `date`, `type-date`, `hierarchical-type-ext`, `project-type`.
+- `--organize-by`: `flat`, `type`, `date`, `type-date`, `hierarchical-type-ext`, `project-type`, `factusol-client-budget`.
 - `--conflict`: `rename`, `overwrite`, `skip`, `overwrite-if-newer`.
 - `--projects`: lista separada por comas o ruta a TXT/CSV con numeros de proyecto.
+- `--mapping-excel`: Excel simplificado de FactuSOL con hoja `Mapping_FactuSOL`.
+- `--years`: anos permitidos, por ejemplo `2025,2026`.
+- `--unmatched-dir`: carpeta de revision, por defecto `_REVISION`.
+- `--require-budget-match`: audita los archivos sin match sin copiarlos.
 - `--dedup`: usa hardlinks para duplicados cuando es posible.
 - `--no-incremental`: ignora cache previa.
 - `--no-verify`: no recalcula hash del destino.
@@ -96,6 +100,33 @@ Opciones utiles:
 ```
 
 El servidor escucha por defecto en `http://127.0.0.1:8000`. Si el puerto esta ocupado y no se indico `-Port`, el lanzador busca otro puerto disponible.
+
+## Flujo FactuSOL simplificado
+
+El modo `factusol-client-budget` usa el Excel simplificado como fuente de verdad. La app lee la hoja `Mapping_FactuSOL`, detecta el numero de presupuesto en el nombre o ruta del archivo y construye:
+
+```text
+DESTINO/ANIO/CLIENTE/SEDE_HOTEL_DIRECCION/Presupuesto NUMERO/TipoDocumento/archivo
+```
+
+Dry-run:
+
+```powershell
+python -m reorganizador_v2.main scan `
+  --source "R:\Gestores" `
+  --dest "D:\Presupuestos_Organizados" `
+  --organize-by factusol-client-budget `
+  --mapping-excel "C:\Temp\factusol_mapping_app_simplificado.xlsx" `
+  --years "2025,2026" `
+  --conflict rename `
+  --hash-algo sha256 `
+  --csv-out "CSV-BD\organizacion_presupuestos.csv" `
+  --sqlite-db "CSV-BD\organizacion_presupuestos.db" `
+  --excel-out "CSV-BD\auditoria_organizacion.xlsx" `
+  --dry-run
+```
+
+Ejecucion real: el mismo comando sin `--dry-run`.
 
 ## Datos generados
 

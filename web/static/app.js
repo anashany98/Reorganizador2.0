@@ -8,7 +8,9 @@ const statusText = document.getElementById('statusText');
 const statusBadge = document.getElementById('statusBadge');
 
 const statProcessed = document.getElementById('statProcessed');
-const statSkipped = document.getElementById('statSkipped');
+const statSinNumero = document.getElementById('statSinNumero');
+const statNoEncontrado = document.getElementById('statNoEncontrado');
+const statAmbiguo = document.getElementById('statAmbiguo');
 const statErrors = document.getElementById('statErrors');
 
 let pollingInterval = null;
@@ -206,12 +208,16 @@ function loadPreset(name) {
     if (!preset) return;
     if (preset.source) document.getElementById('source').value = preset.source;
     if (preset.dest) document.getElementById('dest').value = preset.dest;
+    if (preset.mappingExcel) document.getElementById('mappingExcel').value = preset.mappingExcel;
+    if (preset.years) setSelectedYears(preset.years);
     if (preset.organizeBy) document.getElementById('organizeBy').value = preset.organizeBy;
     if (preset.moveFiles !== undefined) document.getElementById('moveFiles').checked = preset.moveFiles;
     if (preset.dryRun !== undefined) document.getElementById('dryRun').checked = preset.dryRun;
     if (preset.minSize) document.getElementById('minSize').value = preset.minSize;
     if (preset.extensions) document.getElementById('extensions').value = preset.extensions;
     if (preset.projectFilter) document.getElementById('projectFilter').value = preset.projectFilter;
+    if (preset.unmatchedDir) document.getElementById('unmatchedDir').value = preset.unmatchedDir;
+    if (preset.requireBudgetMatch !== undefined) document.getElementById('requireBudgetMatch').checked = preset.requireBudgetMatch;
     if (preset.threads) document.getElementById('threads').value = preset.threads;
     if (preset.processes) document.getElementById('processes').value = preset.processes;
     if (preset.conflict) document.getElementById('conflict').value = preset.conflict;
@@ -240,12 +246,16 @@ function savePreset() {
     const currentConfig = {
         source: document.getElementById('source').value,
         dest: document.getElementById('dest').value,
+        mappingExcel: document.getElementById('mappingExcel').value,
+        years: getSelectedYears(),
         organizeBy: document.getElementById('organizeBy').value,
         moveFiles: document.getElementById('moveFiles').checked,
         dryRun: document.getElementById('dryRun').checked,
         minSize: document.getElementById('minSize').value,
         extensions: document.getElementById('extensions').value,
         projectFilter: document.getElementById('projectFilter').value,
+        unmatchedDir: document.getElementById('unmatchedDir').value,
+        requireBudgetMatch: document.getElementById('requireBudgetMatch').checked,
         threads: document.getElementById('threads').value,
         processes: document.getElementById('processes').value,
         conflict: document.getElementById('conflict').value,
@@ -280,6 +290,10 @@ function deleteCurrentPreset() {
 async function doPreview() {
     const source = document.getElementById('source').value;
     const projects = document.getElementById('projectFilter').value;
+    const mappingExcel = document.getElementById('mappingExcel').value;
+    const years = getSelectedYears().join(',');
+    const dest = document.getElementById('dest').value;
+    const unmatchedDir = document.getElementById('unmatchedDir').value || '_REVISION';
     if (!source) {
         showToast('Especifica una carpeta origen', 'error');
         return;
@@ -290,7 +304,14 @@ async function doPreview() {
     content.innerHTML = '<div class="preview-loading">Analizando carpeta...</div>';
 
     try {
-        const params = new URLSearchParams({ source, projects });
+        const params = new URLSearchParams({
+            source,
+            projects,
+            mapping_excel: mappingExcel,
+            years,
+            dest,
+            unmatched_dir: unmatchedDir,
+        });
         const resp = await fetch(`/api/preview?${params.toString()}`);
         if (!resp.ok) throw new Error((await resp.json()).detail || 'Error');
         const data = await resp.json();
@@ -309,6 +330,7 @@ function renderPreview(data) {
         return (bytes / 1073741824).toFixed(2) + ' GB';
     };
 
+    const counters = data.match_counters || {};
     let html = `
     <div class="preview-grid">
         <div class="preview-stat">
@@ -328,14 +350,49 @@ function renderPreview(data) {
             <span class="preview-stat-label">Pendientes</span>
         </div>
         <div class="preview-stat">
-            <span class="preview-stat-num">${Object.keys(data.gestores || {}).length}</span>
-            <span class="preview-stat-label">Gestores</span>
+            <span class="preview-stat-num">${(counters.OK || 0).toLocaleString()}</span>
+            <span class="preview-stat-label">OK</span>
         </div>
         <div class="preview-stat">
-            <span class="preview-stat-num">${Object.keys(data.proyectos || {}).length}</span>
-            <span class="preview-stat-label">Proyectos</span>
+            <span class="preview-stat-num">${(counters.AMBIGUO || 0).toLocaleString()}</span>
+            <span class="preview-stat-label">Ambiguos</span>
         </div>
     </div>`;
+
+    if (data.items && data.items.length > 0) {
+        html += `<div class="preview-section">
+            <h4>Coincidencias FactuSOL</h4>
+            <div class="table-wrap preview-table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Archivo</th>
+                            <th>Presupuesto</th>
+                            <th>Cliente</th>
+                            <th>Sede_Hotel_Direccion</th>
+                            <th>Referencia</th>
+                            <th>TipoDocumento</th>
+                            <th>MatchStatus</th>
+                            <th>Confianza</th>
+                            <th>Ruta destino</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+        data.items.forEach((item) => {
+            html += `<tr>
+                <td title="${escapeHtml(item.src_path || '')}">${escapeHtml(item.file_name || '')}</td>
+                <td>${escapeHtml(item.presupuesto_detectado || '')}</td>
+                <td>${escapeHtml(item.cliente || '')}</td>
+                <td>${escapeHtml(item.sede_hotel_direccion || '')}</td>
+                <td>${escapeHtml(item.referencia || '')}</td>
+                <td>${escapeHtml(item.tipo_documento || '')}</td>
+                <td>${escapeHtml(item.match_status || '')}</td>
+                <td>${escapeHtml(String(item.match_confidence ?? ''))}</td>
+                <td title="${escapeHtml(item.dst_path || '')}">${escapeHtml(item.dst_path || '')}</td>
+            </tr>`;
+        });
+        html += `</tbody></table></div></div>`;
+    }
 
     // Extensions
     const exts = Object.entries(data.extensions || {}).sort((a, b) => b[1] - a[1]).slice(0, 15);
@@ -392,16 +449,42 @@ function setRuntimeState(state, label) {
 // CONFIG
 // ============================================================
 
+function getSelectedYears() {
+    const years = [];
+    if (document.getElementById('year2025').checked) years.push('2025');
+    if (document.getElementById('year2026').checked) years.push('2026');
+    return years;
+}
+
+function setSelectedYears(years) {
+    const selected = Array.isArray(years) ? years : String(years || '').split(',');
+    document.getElementById('year2025').checked = selected.includes('2025');
+    document.getElementById('year2026').checked = selected.includes('2026');
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 function loadConfig() {
     const saved = JSON.parse(localStorage.getItem('reorganizer_config') || '{}');
     if (saved.source) document.getElementById('source').value = saved.source;
     if (saved.dest) document.getElementById('dest').value = saved.dest;
+    if (saved.mappingExcel) document.getElementById('mappingExcel').value = saved.mappingExcel;
+    if (saved.years) setSelectedYears(saved.years);
     if (saved.organizeBy) document.getElementById('organizeBy').value = saved.organizeBy;
     if (saved.moveFiles !== undefined) document.getElementById('moveFiles').checked = saved.moveFiles;
     if (saved.dryRun !== undefined) document.getElementById('dryRun').checked = saved.dryRun;
     if (saved.minSize) document.getElementById('minSize').value = saved.minSize;
     if (saved.extensions) document.getElementById('extensions').value = saved.extensions;
     if (saved.projectFilter) document.getElementById('projectFilter').value = saved.projectFilter;
+    if (saved.unmatchedDir) document.getElementById('unmatchedDir').value = saved.unmatchedDir;
+    if (saved.requireBudgetMatch !== undefined) document.getElementById('requireBudgetMatch').checked = saved.requireBudgetMatch;
     if (saved.threads) document.getElementById('threads').value = saved.threads;
     if (saved.processes) document.getElementById('processes').value = saved.processes;
     if (saved.conflict) document.getElementById('conflict').value = saved.conflict;
@@ -412,12 +495,16 @@ function saveConfig() {
     const config = {
         source: document.getElementById('source').value,
         dest: document.getElementById('dest').value,
+        mappingExcel: document.getElementById('mappingExcel').value,
+        years: getSelectedYears(),
         organizeBy: document.getElementById('organizeBy').value,
         moveFiles: document.getElementById('moveFiles').checked,
         dryRun: document.getElementById('dryRun').checked,
         minSize: document.getElementById('minSize').value,
         extensions: document.getElementById('extensions').value,
         projectFilter: document.getElementById('projectFilter').value,
+        unmatchedDir: document.getElementById('unmatchedDir').value,
+        requireBudgetMatch: document.getElementById('requireBudgetMatch').checked,
         threads: document.getElementById('threads').value,
         processes: document.getElementById('processes').value,
         conflict: document.getElementById('conflict').value,
@@ -426,7 +513,7 @@ function saveConfig() {
     localStorage.setItem('reorganizer_config', JSON.stringify(config));
 }
 
-['source', 'dest', 'organizeBy', 'moveFiles', 'dryRun', 'minSize', 'extensions', 'projectFilter', 'threads', 'processes', 'conflict', 'dedup'].forEach((id) => {
+['source', 'dest', 'mappingExcel', 'year2025', 'year2026', 'organizeBy', 'moveFiles', 'dryRun', 'minSize', 'extensions', 'projectFilter', 'unmatchedDir', 'requireBudgetMatch', 'threads', 'processes', 'conflict', 'dedup'].forEach((id) => {
     const element = document.getElementById(id);
     if (element) element.addEventListener('change', saveConfig);
 });
@@ -435,7 +522,9 @@ function resetProgress() {
     if (progressBar) progressBar.style.width = '0%';
     if (progressText) progressText.textContent = '0%';
     statProcessed.innerText = '0';
-    statSkipped.innerText = '0';
+    statSinNumero.innerText = '0';
+    statNoEncontrado.innerText = '0';
+    statAmbiguo.innerText = '0';
     statErrors.innerText = '0';
 }
 
@@ -452,6 +541,10 @@ async function startScan() {
         source: document.getElementById('source').value,
         dest: document.getElementById('dest').value,
         organize_by: document.getElementById('organizeBy').value,
+        mapping_excel: document.getElementById('mappingExcel').value,
+        years: getSelectedYears().join(','),
+        unmatched_dir: document.getElementById('unmatchedDir').value || '_REVISION',
+        require_budget_match: document.getElementById('requireBudgetMatch').checked,
         move: document.getElementById('moveFiles').checked,
         dry_run: document.getElementById('dryRun').checked,
         min_size_mb: parseFloat(document.getElementById('minSize').value) || 0,
@@ -466,6 +559,16 @@ async function startScan() {
     if (!config.source) {
         showToast('Debes especificar una carpeta origen', 'error');
         setRuntimeState('error', 'Falta origen');
+        return;
+    }
+    if (config.organize_by === 'factusol-client-budget' && !config.mapping_excel) {
+        showToast('Selecciona el Excel simplificado de FactuSOL', 'error');
+        setRuntimeState('error', 'Falta Excel');
+        return;
+    }
+    if (config.organize_by === 'factusol-client-budget' && !config.dest) {
+        showToast('Debes especificar una carpeta destino', 'error');
+        setRuntimeState('error', 'Falta destino');
         return;
     }
 
@@ -502,6 +605,12 @@ async function startScan() {
     }
 }
 
+function startRealCopy() {
+    document.getElementById('dryRun').checked = false;
+    saveConfig();
+    startScan();
+}
+
 async function stopScan() {
     try {
         await fetch('/api/stop', { method: 'POST' });
@@ -520,8 +629,11 @@ async function checkStatus() {
         const data = await response.json();
         const percent = data.percent ?? Math.round((data.processed / (data.total || 1)) * 100);
 
-        statProcessed.innerText = data.stats.processed;
-        statSkipped.innerText = data.stats.skipped;
+        const matchCounters = data.match_counters || {};
+        statProcessed.innerText = matchCounters.OK ?? data.stats.processed;
+        statSinNumero.innerText = matchCounters.SIN_NUMERO_PRESUPUESTO || 0;
+        statNoEncontrado.innerText = matchCounters.NO_ENCONTRADO_EN_EXCEL || 0;
+        statAmbiguo.innerText = matchCounters.AMBIGUO || 0;
         statErrors.innerText = data.stats.errors;
         if (progressBar) progressBar.style.width = `${percent}%`;
         if (progressText) progressText.textContent = `${percent}%`;
@@ -572,10 +684,12 @@ function log(message, type = 'info') {
 function setLoading(isLoading) {
     if (isLoading) {
         startBtn.classList.add('hidden');
+        if (previewBtn) previewBtn.classList.add('hidden');
         stopBtn.classList.remove('hidden');
         stopBtn.disabled = false;
     } else {
         startBtn.classList.remove('hidden');
+        if (previewBtn) previewBtn.classList.remove('hidden');
         stopBtn.classList.add('hidden');
     }
 }
@@ -830,10 +944,3 @@ function downloadAudit() {
     document.body.removeChild(link);
     showToast('Descargando Excel de auditoria...', 'info');
 }
-
-// ============================================================
-// EVENT LISTENERS
-// ============================================================
-
-startBtn.addEventListener('click', startScan);
-stopBtn.addEventListener('click', stopScan);

@@ -57,6 +57,7 @@ class OrganizeBy(str, Enum):
     TYPE_DATE = "type-date"
     HIERARCHICAL_TYPE_EXT = 'hierarchical-type-ext'
     PROJECT_TYPE = 'project-type'
+    FACTUSOL_CLIENT_BUDGET = "factusol-client-budget"
 
     @classmethod
     def choices(cls) -> list[str]:
@@ -81,6 +82,20 @@ SQL_COLUMNS = [
     "dst_path",
     "gestor",
     "proyecto",
+    "year",
+    "presupuesto_detectado",
+    "cliente",
+    "sede_hotel_direccion",
+    "referencia",
+    "origen_asignacion",
+    "clave_interna",
+    "tipo_documento",
+    "match_status",
+    "match_confidence",
+    "match_source",
+    "match_reason",
+    "texto_detectado",
+    "duplicado_anio_presupuesto",
     "action",
     "action_status",
     "error",
@@ -104,6 +119,20 @@ CSV_HEADERS = [
     "dst_path",
     "gestor",
     "proyecto",
+    "year",
+    "presupuesto_detectado",
+    "cliente",
+    "sede_hotel_direccion",
+    "referencia",
+    "origen_asignacion",
+    "clave_interna",
+    "tipo_documento",
+    "match_status",
+    "match_confidence",
+    "match_source",
+    "match_reason",
+    "texto_detectado",
+    "duplicado_anio_presupuesto",
     "action",
     "action_status",
     "error",
