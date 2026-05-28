@@ -24,7 +24,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from . import config, file_utils
+from . import config, factusol_mapping, file_utils
 from .processor import (
     BatchProcessor,
     FileProcessor,
@@ -86,7 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
         "scan",
         help="Procesa una carpeta de forma puntual.",
     )
-    scan_parser.add_argument("--source", required=True, help="Carpeta origen a explorar.")
+    scan_parser.add_argument("--source", help="Carpeta origen a explorar.")
+    scan_parser.add_argument(
+        "--sources",
+        action="append",
+        help="Carpetas origen separadas por punto y coma o argumento repetido.",
+    )
     scan_parser.add_argument("--dest", help="Carpeta destino para organizar/copiar.")
     scan_parser.add_argument(
         "--organize-by",
@@ -170,6 +175,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--projects",
         help="Filtrar por números de proyecto (archivo CSV/TXT o lista separada por comas).",
     )
+    scan_parser.add_argument(
+        "--mapping-excel",
+        help="Ruta al Excel simplificado de FactuSOL con hoja Mapping_FactuSOL.",
+    )
+    scan_parser.add_argument(
+        "--years",
+        help='Lista de anos permitidos separada por comas. Ejemplo: "2025,2026".',
+    )
+    scan_parser.add_argument(
+        "--unmatched-dir",
+        default="_REVISION",
+        help="Nombre de carpeta para revision de no coincidentes.",
+    )
+    scan_parser.add_argument(
+        "--require-budget-match",
+        action="store_true",
+        help="Si esta activo, los archivos sin match se auditan pero no se copian.",
+    )
 
     # watch command
     watch_parser = subparsers.add_parser(
@@ -215,6 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     
     preview_parser = subparsers.add_parser("preview", help="Pre-escaneo informativo sin procesar archivos.")
     preview_parser.add_argument("--source", required=True, help="Carpeta origen a explorar.")
+
     preview_parser.add_argument("--projects", help="Filtrar por proyecto para el preview.")
     preview_parser.add_argument("--sqlite-db", default="metadatos.db", help="BD SQLite para cache incremental.")
 
@@ -245,18 +269,65 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse_scan_sources(args: argparse.Namespace) -> list[Path]:
+    raw_sources: list[str] = []
+    if getattr(args, "source", None):
+        raw_sources.append(args.source)
+    for value in getattr(args, "sources", None) or []:
+        raw_sources.extend(part for part in value.split(";") if part.strip())
+
+    sources: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_sources:
+        resolved = str(Path(raw.strip()).resolve())
+        if resolved not in seen:
+            seen.add(resolved)
+            sources.append(Path(resolved))
+
+    if not sources:
+        raise ValueError("Debe indicarse --source o --sources.")
+    return sources
+
+
+def _parse_years(raw: str | None) -> set[str] | None:
+    if not raw or not raw.strip():
+        return None
+    years = {item.strip() for item in raw.split(",") if item.strip()}
+    return years or None
+
+
+def _common_source_root(sources: Sequence[Path]) -> Path:
+    if len(sources) == 1:
+        return sources[0]
+    try:
+        return Path(os.path.commonpath([str(source) for source in sources])).resolve()
+    except ValueError as exc:
+        raise ValueError("Las carpetas en --sources deben compartir una raiz comun.") from exc
+
+
 def run_scan(args: argparse.Namespace) -> None:
     """Procesa la carpeta origen una única vez con las opciones del comando `scan`."""
     log_file = config.setup_logging(args.log_level)
     console.print(f"[green]Logs guardados en[/green] {log_file}")
 
-    source = Path(args.source).resolve()
-    if not source.exists():
-        raise FileNotFoundError(f"La ruta origen no existe: {source}")
+    sources = _parse_scan_sources(args)
+    for source_candidate in sources:
+        if not source_candidate.exists():
+            raise FileNotFoundError(f"La ruta origen no existe: {source_candidate}")
+    source = _common_source_root(sources)
 
     dest = Path(args.dest).resolve() if args.dest else None
     if dest:
         dest.mkdir(parents=True, exist_ok=True)
+
+    mapping_index = None
+    allowed_years = _parse_years(args.years)
+    if args.organize_by == config.OrganizeBy.FACTUSOL_CLIENT_BUDGET.value:
+        if dest is None:
+            raise ValueError("El modo factusol-client-budget requiere --dest.")
+        if not args.mapping_excel:
+            raise ValueError("El modo factusol-client-budget requiere --mapping-excel.")
+        mapping_index = factusol_mapping.load_mapping(Path(args.mapping_excel).resolve())
 
     options = ProcessingOptions(
         source_root=source,
@@ -270,6 +341,10 @@ def run_scan(args: argparse.Namespace) -> None:
         conflict=args.conflict,
         dedup=args.dedup,
         resume=args.resume,
+        factusol_index=mapping_index,
+        allowed_years=allowed_years,
+        unmatched_dir=args.unmatched_dir,
+        require_budget_match=args.require_budget_match,
         threads=max(1, args.threads),
         processes=max(0, args.processes),
     )
@@ -314,7 +389,7 @@ def run_scan(args: argparse.Namespace) -> None:
 
     batch_processor = BatchProcessor(processor, sink_manager)
 
-    files = [path for path in file_utils.iter_files(source)]
+    files = [path for scan_source in sources for path in file_utils.iter_files(scan_source)]
 
     # 
     if args.resume and sqlite_sink:
@@ -405,7 +480,7 @@ def run_scan(args: argparse.Namespace) -> None:
             excel_path = excel_audit.generate_audit_excel(
                 db_path=Path(args.sqlite_db),
                 output_path=Path(args.excel_out),
-                source_label=str(source),
+                source_label="; ".join(str(item) for item in sources),
                 dest_label=str(dest) if dest else '',
             )
             console.print(f'[green]Excel de auditoria guardado en[/green] {excel_path}')

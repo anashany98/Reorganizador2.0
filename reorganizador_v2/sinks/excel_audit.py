@@ -36,6 +36,11 @@ _COLUMNS = [
     ("Tamano (bytes)", 16), ("Creado", 18), ("Modificado", 18),
     ("Hash", 18), ("Hash valor", 66), ("Ruta origen", 55),
     ("Ruta destino", 55), ("Gestor", 18), ("Proyecto", 16),
+    ("Anio", 10), ("Presupuesto detectado", 18), ("Cliente", 28),
+    ("Sede_Hotel_Direccion", 32), ("Referencia", 36),
+    ("OrigenAsignacion", 18), ("ClaveInterna", 22), ("TipoDocumento", 16),
+    ("MatchStatus", 20), ("Confianza", 12), ("MatchSource", 16),
+    ("MatchReason", 40), ("TextoDetectado", 28), ("Duplicado", 12),
     ("Accion", 10), ("Estado", 10), ("Error", 40), ("Verificado", 12),
 ]
 
@@ -59,6 +64,10 @@ def _write_data_rows(ws, rows, start_row=2):
         "file_name", "extension", "mime_type", "size_bytes",
         "created_time", "modified_time", "hash_algo", "hash_value",
         "src_path", "dst_path", "gestor", "proyecto",
+        "year", "presupuesto_detectado", "cliente", "sede_hotel_direccion",
+        "referencia", "origen_asignacion", "clave_interna", "tipo_documento",
+        "match_status", "match_confidence", "match_source", "match_reason",
+        "texto_detectado", "duplicado_anio_presupuesto",
         "action", "action_status", "error", "verified",
     ]
     for r_idx, row in enumerate(rows, start=start_row):
@@ -100,6 +109,10 @@ def generate_audit_excel(db_path, output_path, source_label="", dest_label=""):
     skipped = sum(1 for r in all_rows if r.get("action") == "skip")
     copied = sum(1 for r in all_rows if r.get("action") == "copy")
     moved = sum(1 for r in all_rows if r.get("action") == "move")
+    ok_matches = sum(1 for r in all_rows if str(r.get("match_status") or "").startswith("OK_"))
+    without_number = sum(1 for r in all_rows if r.get("match_status") == "SIN_NUMERO_PRESUPUESTO")
+    not_found = sum(1 for r in all_rows if r.get("match_status") == "NO_ENCONTRADO_EN_EXCEL")
+    ambiguous = sum(1 for r in all_rows if r.get("match_status") == "AMBIGUO")
 
     wb = Workbook()
 
@@ -122,6 +135,10 @@ def generate_audit_excel(db_path, output_path, source_label="", dest_label=""):
         ("Movidos", moved),
         ("Omitidos (skip)", skipped),
         ("Errores", errors),
+        ("Match OK", ok_matches),
+        ("Sin numero presupuesto", without_number),
+        ("No encontrado en Excel", not_found),
+        ("Ambiguos", ambiguous),
     ]
     for r_idx, (label, value) in enumerate(summary, start=4):
         c1 = ws1.cell(row=r_idx, column=1, value=label)

@@ -50,6 +50,20 @@ class SQLiteSink:
                 dst_path TEXT,
                 gestor TEXT,
                 proyecto TEXT,
+                year TEXT,
+                presupuesto_detectado TEXT,
+                cliente TEXT,
+                sede_hotel_direccion TEXT,
+                referencia TEXT,
+                origen_asignacion TEXT,
+                clave_interna TEXT,
+                tipo_documento TEXT,
+                match_status TEXT,
+                match_confidence REAL,
+                match_source TEXT,
+                match_reason TEXT,
+                texto_detectado TEXT,
+                duplicado_anio_presupuesto TEXT,
                 action TEXT,
                 action_status TEXT,
                 error TEXT,
@@ -80,13 +94,16 @@ class SQLiteSink:
         # Comprueba que las columnas nuevas existan en bases antiguas.
         cursor.execute("PRAGMA table_info(files)")
         columns = {row["name"] for row in cursor.fetchall()}
-        migrations: List[tuple[str, str]] = []
-        if "verified" not in columns:
-            migrations.append(("verified", "INTEGER DEFAULT 0"))
-        if "gestor" not in columns:
-            migrations.append(("gestor", "TEXT"))
-        if "proyecto" not in columns:
-            migrations.append(("proyecto", "TEXT"))
+        column_types = {
+            "size_bytes": "INTEGER",
+            "match_confidence": "REAL",
+            "verified": "INTEGER DEFAULT 0",
+        }
+        migrations: List[tuple[str, str]] = [
+            (column, column_types.get(column, "TEXT"))
+            for column in SQL_COLUMNS
+            if column not in columns
+        ]
 
         for column, ddl in migrations:
             # Aplica migraciones simples solo cuando hacen falta para no romper instalaciones previas.
@@ -99,28 +116,16 @@ class SQLiteSink:
         if not payload:
             return
 
+        update_columns = [column for column in SQL_COLUMNS if column != "src_path"]
+        update_assignments = ",\n                ".join(
+            f"{column}=excluded.{column}" for column in update_columns
+        )
+
         query = f"""
             INSERT INTO files ({", ".join(SQL_COLUMNS)})
             VALUES ({", ".join(["?"] * len(SQL_COLUMNS))})
             ON CONFLICT(src_path) DO UPDATE SET
-                file_name=excluded.file_name,
-                extension=excluded.extension,
-                mime_type=excluded.mime_type,
-                size_bytes=excluded.size_bytes,
-                created_time=excluded.created_time,
-                modified_time=excluded.modified_time,
-                accessed_time=excluded.accessed_time,
-                hash_algo=excluded.hash_algo,
-                hash_value=excluded.hash_value,
-                hash_value_dst=excluded.hash_value_dst,
-                hash_verified=excluded.hash_verified,
-                dst_path=excluded.dst_path,
-                gestor=excluded.gestor,
-                proyecto=excluded.proyecto,
-                action=excluded.action,
-                action_status=excluded.action_status,
-                error=excluded.error,
-                verified=excluded.verified
+                {update_assignments}
         """
 
         attempt = 0

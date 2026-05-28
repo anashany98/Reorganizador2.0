@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Sequence
 
-from . import config, file_utils
+from . import config, factusol_mapping, file_utils
 from .sinks.csv_sink import CsvSink
 from .sinks.sqlite_sink import SQLiteSink
 from .sinks.sqlserver_sink import SqlServerSink
@@ -36,6 +36,10 @@ class ProcessingOptions:
     conflict: str = "rename"
     dedup: bool = False
     resume: bool = False
+    factusol_index: factusol_mapping.FactusolMappingIndex | None = None
+    allowed_years: set[str] | None = None
+    unmatched_dir: str = "_REVISION"
+    require_budget_match: bool = False
 
 
 @dataclass(slots=True)
@@ -88,6 +92,20 @@ class ProcessingRecord:
     dest_path: Optional[str]
     gestor: Optional[str] = None
     proyecto: Optional[str] = None
+    year: Optional[str] = None
+    presupuesto_detectado: Optional[str] = None
+    cliente: Optional[str] = None
+    sede_hotel_direccion: Optional[str] = None
+    referencia: Optional[str] = None
+    origen_asignacion: Optional[str] = None
+    clave_interna: Optional[str] = None
+    tipo_documento: Optional[str] = None
+    match_status: Optional[str] = None
+    match_confidence: Optional[float] = None
+    match_source: Optional[str] = None
+    match_reason: Optional[str] = None
+    texto_detectado: Optional[str] = None
+    duplicado_anio_presupuesto: Optional[str] = None
     error: Optional[str] = None
     verified: bool = False
     duration_hash: float = 0.0
@@ -110,6 +128,20 @@ class ProcessingRecord:
             "dst_path": self.dest_path,
             "gestor": self.gestor,
             "proyecto": self.proyecto,
+            "year": self.year,
+            "presupuesto_detectado": self.presupuesto_detectado,
+            "cliente": self.cliente,
+            "sede_hotel_direccion": self.sede_hotel_direccion,
+            "referencia": self.referencia,
+            "origen_asignacion": self.origen_asignacion,
+            "clave_interna": self.clave_interna,
+            "tipo_documento": self.tipo_documento,
+            "match_status": self.match_status,
+            "match_confidence": self.match_confidence,
+            "match_source": self.match_source,
+            "match_reason": self.match_reason,
+            "texto_detectado": self.texto_detectado,
+            "duplicado_anio_presupuesto": self.duplicado_anio_presupuesto,
             "action": self.action,
             "action_status": self.action_status,
             "error": self.error,
@@ -235,14 +267,41 @@ class FileProcessor:
         action = "scan"
         dest_path: Optional[Path] = None
         dest_path_str: Optional[str] = None
+        match_result: factusol_mapping.MatchResult | None = None
+        require_match_skip = False
+        mode = (
+            self.options.organize_by.value
+            if isinstance(self.options.organize_by, config.OrganizeBy)
+            else self.options.organize_by
+        )
 
         if self.options.dest_root:
             action = "move" if self.options.move_files else "copy"
-            candidate = file_utils.build_destination_path(
-                src=path, dest_root=self.options.dest_root,
-                source_root=self.options.source_root,
-                mode=self.options.organize_by, modified_time=metadata.mtime_ts,
-            )
+            if mode == config.OrganizeBy.FACTUSOL_CLIENT_BUDGET.value:
+                if self.options.factusol_index is None:
+                    raise ValueError("El modo factusol-client-budget requiere --mapping-excel.")
+                match_result = factusol_mapping.resolve_budget_match(
+                    path=path,
+                    mapping_index=self.options.factusol_index,
+                    allowed_years=self.options.allowed_years,
+                )
+                match_result.tipo_documento = factusol_mapping.categorize_document_type(path)
+                candidate = factusol_mapping.build_factusol_client_budget_destination_path(
+                    src=path,
+                    dest_root=self.options.dest_root,
+                    source_root=self.options.source_root,
+                    match_result=match_result,
+                    unmatched_dir=self.options.unmatched_dir,
+                )
+                require_match_skip = self.options.require_budget_match and not match_result.is_ok
+            else:
+                candidate = file_utils.build_destination_path(
+                    src=path,
+                    dest_root=self.options.dest_root,
+                    source_root=self.options.source_root,
+                    mode=self.options.organize_by,
+                    modified_time=metadata.mtime_ts,
+                )
             dest_path = candidate
             dest_path_str = str(dest_path)
 
@@ -267,6 +326,7 @@ class FileProcessor:
                 hash_value_dst=cache_entry.dest_hash,
                 hash_verified=cache_entry.hash_verified or "cached",
                 dest_path=cache_entry.dest_path, gestor=gestor, proyecto=proyecto,
+                **_match_record_kwargs(match_result),
                 error=None, verified=cache_entry.verified,
             )
             return record
@@ -292,7 +352,10 @@ class FileProcessor:
         error: Optional[str] = None
         action_status = "ok"
 
-        if dest_path and action != "scan":
+        if require_match_skip:
+            action = "skip"
+            action_status = "skipped"
+        elif dest_path and action != "scan":
             # --- Conflict resolution ---
             if dest_path.exists() and file_utils.should_overwrite(
                 dest_path, metadata.mtime_ts, self.options.conflict
@@ -339,6 +402,8 @@ class FileProcessor:
 
         if dest_path is None:
             hash_verified = "n/a"
+        elif require_match_skip:
+            hash_verified = "skipped"
         elif self.options.dry_run:
             hash_verified = "dry-run"
         elif action_status == "ok" and self.options.verify_hash and hash_result.value and dest_path.exists():
@@ -359,6 +424,7 @@ class FileProcessor:
             hash_value=hash_result.value, hash_algo=hash_result.algorithm,
             hash_value_dst=hash_value_dst, hash_verified=hash_verified,
             dest_path=dest_path_str, gestor=gestor, proyecto=proyecto,
+            **_match_record_kwargs(match_result),
             error=error, verified=verified_flag,
             duration_hash=hash_result.duration_seconds,
         )
@@ -472,3 +538,24 @@ def _safe_int(value: Optional[str]) -> Optional[int]:
         return int(value)
     except ValueError:
         return None
+
+
+def _match_record_kwargs(match_result: factusol_mapping.MatchResult | None) -> dict[str, object]:
+    if match_result is None:
+        return {}
+    return {
+        "year": match_result.year,
+        "presupuesto_detectado": match_result.presupuesto_detectado,
+        "cliente": match_result.cliente,
+        "sede_hotel_direccion": match_result.sede_hotel_direccion,
+        "referencia": match_result.referencia,
+        "origen_asignacion": match_result.origen_asignacion,
+        "clave_interna": match_result.clave_interna,
+        "tipo_documento": match_result.tipo_documento,
+        "match_status": match_result.status,
+        "match_confidence": round(match_result.confidence, 4),
+        "match_source": match_result.source_level,
+        "match_reason": match_result.reason,
+        "texto_detectado": match_result.texto_detectado,
+        "duplicado_anio_presupuesto": match_result.duplicado_anio_presupuesto,
+    }

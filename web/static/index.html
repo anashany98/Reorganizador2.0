@@ -56,15 +56,29 @@
             </div>
         </div>
 
+        <div class="field">
+            <label for="mappingExcel">Excel FactuSOL</label>
+            <input type="text" id="mappingExcel" placeholder="C:\Temp\factusol_mapping_app_simplificado.xlsx" spellcheck="false">
+        </div>
+
+        <div class="field">
+            <label>Años</label>
+            <div class="year-row">
+                <label class="check-pill"><input type="checkbox" id="year2025" checked><span>2025</span></label>
+                <label class="check-pill"><input type="checkbox" id="year2026" checked><span>2026</span></label>
+            </div>
+        </div>
+
         <!-- Strategy -->
         <div class="field">
             <label for="organizeBy">Estrategia</label>
             <select id="organizeBy">
+                <option value="factusol-client-budget">FactuSOL cliente + presupuesto</option>
                 <option value="type-date">Tipo + Fecha</option>
                 <option value="date">Fecha</option>
                 <option value="type">Tipo</option>
                 <option value="hierarchical-type-ext">Jerarquica + Tipo</option>
-                    <option value="project-type">Proyecto + Categoria (sin gestor)</option>
+                <option value="project-type">Proyecto + Categoria (sin gestor)</option>
                 <option value="flat">Plano (espejo)</option>
             </select>
         </div>
@@ -98,6 +112,15 @@
                 <label for="projectFilter">Proyectos (uno por linea o separado por comas)</label>
                 <textarea id="projectFilter" rows="3" placeholder="250076&#10;250077&#10;250-078" class="input-sm" spellcheck="false"></textarea>
             </div>
+            <div class="field">
+                <label for="unmatchedDir">Carpeta revision</label>
+                <input type="text" id="unmatchedDir" value="_REVISION" class="input-sm" spellcheck="false">
+            </div>
+            <label class="toggle">
+                <input type="checkbox" id="requireBudgetMatch">
+                <span class="toggle-track"></span>
+                <span class="toggle-text">No copiar sin match</span>
+            </label>
                     <div class="field">
                 <label for="threads">Hilos de proceso</label>
                 <input type="number" id="threads" value="0" min="0" max="64" class="input-sm" placeholder="Auto">
@@ -147,9 +170,17 @@
                 </button>
                 <button id="startBtn" class="btn btn-primary" type="button" onclick="startScan()" title="Iniciar escaneo (Ctrl+Enter)">
                     <svg viewBox="0 0 16 16"><polygon points="4,2 14,8 4,14"/></svg>
-                    Iniciar escaneo
+                    Ejecutar
                 </button>
             </div>
+            <button id="realCopyBtn" class="btn btn-secondary" type="button" onclick="startRealCopy()">
+                <svg viewBox="0 0 16 16"><path d="M3 8h10M9 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Ejecutar copia real
+            </button>
+            <button id="auditBtn" class="btn btn-ghost" type="button" onclick="downloadAudit()">
+                <svg viewBox="0 0 16 16"><path d="M8 1v10M4 8l4 4 4-4M2 14h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Descargar auditoria Excel
+            </button>
             <button id="stopBtn" class="btn btn-danger hidden" type="button" onclick="stopScan()">
                 <svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
                 Detener
@@ -163,11 +194,19 @@
         <div class="stat-row">
             <div class="stat stat-ok">
                 <span class="stat-num" id="statProcessed">0</span>
-                <span class="stat-label">Procesados</span>
+                <span class="stat-label">OK</span>
             </div>
             <div class="stat stat-skip">
-                <span class="stat-num" id="statSkipped">0</span>
-                <span class="stat-label">Omitidos</span>
+                <span class="stat-num" id="statSinNumero">0</span>
+                <span class="stat-label">Sin numero</span>
+            </div>
+            <div class="stat stat-skip">
+                <span class="stat-num" id="statNoEncontrado">0</span>
+                <span class="stat-label">No Excel</span>
+            </div>
+            <div class="stat stat-skip">
+                <span class="stat-num" id="statAmbiguo">0</span>
+                <span class="stat-label">Ambiguos</span>
             </div>
             <div class="stat stat-err">
                 <span class="stat-num" id="statErrors">0</span>

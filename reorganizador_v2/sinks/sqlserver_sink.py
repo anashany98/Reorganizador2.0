@@ -53,6 +53,20 @@ class SqlServerSink:
                     dst_path NVARCHAR(512),
                     gestor NVARCHAR(128),
                     proyecto NVARCHAR(128),
+                    year NVARCHAR(16),
+                    presupuesto_detectado NVARCHAR(64),
+                    cliente NVARCHAR(260),
+                    sede_hotel_direccion NVARCHAR(260),
+                    referencia NVARCHAR(512),
+                    origen_asignacion NVARCHAR(64),
+                    clave_interna NVARCHAR(128),
+                    tipo_documento NVARCHAR(32),
+                    match_status NVARCHAR(64),
+                    match_confidence FLOAT,
+                    match_source NVARCHAR(64),
+                    match_reason NVARCHAR(512),
+                    texto_detectado NVARCHAR(512),
+                    duplicado_anio_presupuesto NVARCHAR(16),
                     action NVARCHAR(32),
                     action_status NVARCHAR(32),
                     error NVARCHAR(MAX),
@@ -63,16 +77,32 @@ class SqlServerSink:
             """
         )
         self._conn.commit()
-        cursor.execute(
-            f"""
-            IF COL_LENGTH('{self.table}', 'gestor') IS NULL
-                ALTER TABLE {self.table} ADD gestor NVARCHAR(128);
-            IF COL_LENGTH('{self.table}', 'proyecto') IS NULL
-                ALTER TABLE {self.table} ADD proyecto NVARCHAR(128);
-            IF COL_LENGTH('{self.table}', 'verified') IS NULL
-                ALTER TABLE {self.table} ADD verified BIT DEFAULT(0);
-            """
-        )
+        column_types = {
+            "gestor": "NVARCHAR(128)",
+            "proyecto": "NVARCHAR(128)",
+            "year": "NVARCHAR(16)",
+            "presupuesto_detectado": "NVARCHAR(64)",
+            "cliente": "NVARCHAR(260)",
+            "sede_hotel_direccion": "NVARCHAR(260)",
+            "referencia": "NVARCHAR(512)",
+            "origen_asignacion": "NVARCHAR(64)",
+            "clave_interna": "NVARCHAR(128)",
+            "tipo_documento": "NVARCHAR(32)",
+            "match_status": "NVARCHAR(64)",
+            "match_confidence": "FLOAT",
+            "match_source": "NVARCHAR(64)",
+            "match_reason": "NVARCHAR(512)",
+            "texto_detectado": "NVARCHAR(512)",
+            "duplicado_anio_presupuesto": "NVARCHAR(16)",
+            "verified": "BIT DEFAULT(0)",
+        }
+        for column, ddl in column_types.items():
+            cursor.execute(
+                f"""
+                IF COL_LENGTH('{self.table}', '{column}') IS NULL
+                    ALTER TABLE {self.table} ADD {column} {ddl};
+                """
+            )
         # Mantiene el esquema actualizado aunque la tabla viniera de otra version.
         self._conn.commit()
 
@@ -85,30 +115,18 @@ class SqlServerSink:
         if not payload:
             return
 
+        update_columns = [column for column in SQL_COLUMNS if column != "src_path"]
+        update_assignments = ",\n                ".join(
+            f"{column} = source.{column}" for column in update_columns
+        )
+
         query = f"""
             MERGE {self.table} WITH (HOLDLOCK) AS target
             USING (VALUES ({', '.join(['?'] * len(SQL_COLUMNS))})) AS source
             ({', '.join(SQL_COLUMNS)})
             ON target.src_path = source.src_path
             WHEN MATCHED THEN UPDATE SET
-                file_name = source.file_name,
-                extension = source.extension,
-                mime_type = source.mime_type,
-                size_bytes = source.size_bytes,
-                created_time = source.created_time,
-                modified_time = source.modified_time,
-                accessed_time = source.accessed_time,
-                hash_algo = source.hash_algo,
-                hash_value = source.hash_value,
-                hash_value_dst = source.hash_value_dst,
-                hash_verified = source.hash_verified,
-                dst_path = source.dst_path,
-                gestor = source.gestor,
-                proyecto = source.proyecto,
-                action = source.action,
-                action_status = source.action_status,
-                error = source.error,
-                verified = source.verified
+                {update_assignments}
             WHEN NOT MATCHED THEN INSERT
                 ({', '.join(SQL_COLUMNS)})
                 VALUES ({', '.join(['source.' + col for col in SQL_COLUMNS])});

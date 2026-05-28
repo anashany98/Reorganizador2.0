@@ -19,7 +19,6 @@ from .config import OrganizeBy
 
 @dataclass(slots=True)
 class HashResult:
-    """Represents a hashing outcome."""
     algorithm: str
     value: Optional[str]
     duration_seconds: float
@@ -30,7 +29,6 @@ class HashComputationError(RuntimeError):
 
 
 class ConflictStrategy:
-    """Estrategias de resolucion cuando el destino ya existe."""
     RENAME = "rename"
     OVERWRITE = "overwrite"
     SKIP = "skip"
@@ -54,16 +52,13 @@ CORREO_EXTENSIONS = {"msg", "eml", "pst"}
 
 
 def _win_path(p: Path) -> str:
-    """Prefija con \\?\ para soportar rutas largas en Windows (>260 chars)."""
     s = str(p)
     if _WIN32 and len(s) > 1 and not s.startswith("\\\\?\\"):
         s = "\\\\?\\" + s
     return s
 
 
-
 def _preserve_creation_time(src: Path, dest: Path) -> None:
-    """Copia la fecha de creacion del origen al destino (solo Windows)."""
     if not _WIN32:
         return
     try:
@@ -71,14 +66,16 @@ def _preserve_creation_time(src: Path, dest: Path) -> None:
         kernel32 = ctypes.windll.kernel32
         src_stat = src.stat()
         ctime_ns = int(src_stat.st_ctime * 10_000_000) + 116444736000000000
+        ct = ctypes.c_ulonglong(ctime_ns)
         handle = kernel32.CreateFileW(
             _win_path(dest), 0x40000000, 0, None, 3, 0x02000000, None
         )
         if handle and handle != -1:
-            ctypes.windll.kernel32.SetFileTime(handle, ctypes.byref(ctypes.c_ulonglong(ctime_ns)), None, None)
+            ctypes.windll.kernel32.SetFileTime(handle, ctypes.byref(ct), None, None)
             kernel32.CloseHandle(handle)
     except Exception:
         pass
+
 
 def safe_makedirs(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
@@ -127,7 +124,7 @@ def ensure_unique_path(path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Copy / Move / Hardlink con soporte de rutas largas
+# Copy / Move / Hardlink
 # ---------------------------------------------------------------------------
 
 
@@ -143,7 +140,6 @@ def move_file(src: Path, dest: Path) -> None:
 
 
 def hardlink_or_copy_file(src: Path, dest: Path) -> str:
-    """Crea un hardlink si es posible; si falla, copia normal. Retorna la accion."""
     safe_makedirs(dest.parent)
     try:
         os.link(_win_path(src), _win_path(dest))
@@ -154,7 +150,6 @@ def hardlink_or_copy_file(src: Path, dest: Path) -> str:
 
 
 def should_overwrite(dest: Path, src_mtime: float, strategy: str) -> bool:
-    """Determina si se debe sobrescribir el destino segun la estrategia."""
     if not dest.exists():
         return False
     if strategy == ConflictStrategy.OVERWRITE:
@@ -163,7 +158,7 @@ def should_overwrite(dest: Path, src_mtime: float, strategy: str) -> bool:
         return False
     if strategy == ConflictStrategy.OVERWRITE_IF_NEWER:
         return src_mtime > dest.stat().st_mtime
-    return False  # rename
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +288,6 @@ def build_destination_path(
     else:
         dest = dest_root / relative
 
-    safe_makedirs(dest.parent)
     return dest
 
 
