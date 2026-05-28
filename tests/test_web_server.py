@@ -8,6 +8,7 @@ from pathlib import Path
 from openpyxl import Workbook
 
 from web.server import app
+from web.server import browse
 from web.server import preview_source
 
 
@@ -96,3 +97,66 @@ def test_preview_factusol_returns_rows_and_match_counters(tmp_path: Path) -> Non
     assert result["items"][0]["sede_hotel_direccion"] == "GRAN MELIA VICTORIA"
     assert result["items"][0]["tipo_documento"] == "PDF"
     assert "Presupuesto 250076" in result["items"][0]["dst_path"]
+
+
+def test_browse_can_include_excel_files_for_mapping_picker(tmp_path: Path) -> None:
+    folder = tmp_path / "inputs"
+    folder.mkdir()
+    (folder / "factusol_mapping_app_simplificado.xlsx").write_text("fake", encoding="utf-8")
+    (folder / "notas.txt").write_text("ignore", encoding="utf-8")
+    (folder / "subdir").mkdir()
+
+    result = asyncio.run(
+        browse(
+            path=str(folder),
+            include_files=True,
+            file_extensions=".xlsx,.xls,.xlsm",
+        )
+    )
+
+    items = {(item["name"], item["type"]) for item in result["items"]}
+    assert ("subdir", "dir") in items
+    assert ("factusol_mapping_app_simplificado.xlsx", "file") in items
+    assert ("notas.txt", "file") not in items
+
+
+def test_preview_accepts_multiple_source_folders(tmp_path: Path) -> None:
+    source_a = tmp_path / "Gestores" / "2025"
+    source_b = tmp_path / "Gestores" / "2026"
+    file_a = source_a / "MAR" / "250076" / "a.pdf"
+    file_b = source_b / "ANA" / "260001" / "b.xlsx"
+    file_a.parent.mkdir(parents=True)
+    file_b.parent.mkdir(parents=True)
+    file_a.write_text("alpha", encoding="utf-8")
+    file_b.write_text("beta", encoding="utf-8")
+
+    result = asyncio.run(
+        preview_source(
+            source=str(source_a),
+            sources=str(source_b),
+        )
+    )
+
+    assert result["total_files"] == 2
+    assert result["extensions"] == {"pdf": 1, "xlsx": 1}
+
+
+def test_preview_accepts_sources_without_primary_source(tmp_path: Path) -> None:
+    source_a = tmp_path / "Gestores" / "2025"
+    source_b = tmp_path / "Gestores" / "2026"
+    file_a = source_a / "MAR" / "250076" / "a.pdf"
+    file_b = source_b / "ANA" / "260001" / "b.xlsx"
+    file_a.parent.mkdir(parents=True)
+    file_b.parent.mkdir(parents=True)
+    file_a.write_text("alpha", encoding="utf-8")
+    file_b.write_text("beta", encoding="utf-8")
+
+    result = asyncio.run(
+        preview_source(
+            source="",
+            sources=f"{source_a};{source_b}",
+        )
+    )
+
+    assert result["total_files"] == 2
+    assert result["extensions"] == {"pdf": 1, "xlsx": 1}

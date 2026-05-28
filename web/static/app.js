@@ -1,6 +1,7 @@
 ﻿const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const previewBtn = document.getElementById('previewBtn');
+const realCopyBtn = document.getElementById('realCopyBtn');
 const progressBar = document.getElementById('progressBar');
 const progressText = document.getElementById('progressText');
 const logContent = document.getElementById('logContent');
@@ -18,6 +19,9 @@ let reportInterval = null;
 let lastLoggedFile = "";
 let targetInputId = null;
 let currentBrowsePath = "";
+let selectedBrowseFilePath = "";
+let browseMode = "folder";
+let browseFileExtensions = "";
 let currentTab = 'console';
 let isSidebarCollapsed = localStorage.getItem('sidebar_collapsed') === 'true';
 
@@ -29,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initKeyboardShortcuts();
     setRuntimeState('idle', 'Listo');
     switchTab('console');
+    updatePreflight();
 });
 
 // ============================================================
@@ -78,8 +83,9 @@ function toggleSidebar() {
 function initDragDrop() {
     const sourceInput = document.getElementById('source');
     const destInput = document.getElementById('dest');
+    const mappingInput = document.getElementById('mappingExcel');
 
-    [sourceInput, destInput].forEach(input => {
+    [sourceInput, destInput, mappingInput].forEach(input => {
         if (!input) return;
 
         // Make the parent .input-row a drop zone
@@ -110,6 +116,7 @@ function initDragDrop() {
                         if (file && file.path) {
                             input.value = file.path;
                             saveConfig();
+                            updatePreflight();
                         }
                     } else {
                         // Try to get path from file
@@ -117,6 +124,7 @@ function initDragDrop() {
                         if (file && file.path) {
                             input.value = file.path;
                             saveConfig();
+                            updatePreflight();
                         }
                     }
                 }
@@ -125,7 +133,7 @@ function initDragDrop() {
     });
 
     // Also handle the source/dest inputs directly for drop
-    [sourceInput, destInput].forEach(input => {
+    [sourceInput, destInput, mappingInput].forEach(input => {
         if (!input) return;
         input.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -141,6 +149,7 @@ function initDragDrop() {
             if (file && file.path) {
                 input.value = file.path;
                 saveConfig();
+                updatePreflight();
             }
         });
     });
@@ -156,7 +165,7 @@ function initKeyboardShortcuts() {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
             e.preventDefault();
             if (!startBtn.classList.contains('hidden')) {
-                startScan();
+                startDryRunScan();
             }
         }
         // Escape -> close modals
@@ -207,6 +216,7 @@ function loadPreset(name) {
     const preset = presets[name];
     if (!preset) return;
     if (preset.source) document.getElementById('source').value = preset.source;
+    if (preset.sources) document.getElementById('sources').value = preset.sources;
     if (preset.dest) document.getElementById('dest').value = preset.dest;
     if (preset.mappingExcel) document.getElementById('mappingExcel').value = preset.mappingExcel;
     if (preset.years) setSelectedYears(preset.years);
@@ -223,6 +233,7 @@ function loadPreset(name) {
     if (preset.conflict) document.getElementById('conflict').value = preset.conflict;
     if (preset.dedup !== undefined) document.getElementById('dedup').checked = preset.dedup;
     saveConfig();
+    updatePreflight();
     showToast(`Preset "${name}" cargado`, 'success');
 }
 
@@ -245,6 +256,7 @@ function savePreset() {
     const presets = JSON.parse(localStorage.getItem('reorganizer_presets') || '{}');
     const currentConfig = {
         source: document.getElementById('source').value,
+        sources: document.getElementById('sources').value,
         dest: document.getElementById('dest').value,
         mappingExcel: document.getElementById('mappingExcel').value,
         years: getSelectedYears(),
@@ -289,13 +301,27 @@ function deleteCurrentPreset() {
 
 async function doPreview() {
     const source = document.getElementById('source').value;
+    const sources = document.getElementById('sources').value;
     const projects = document.getElementById('projectFilter').value;
     const mappingExcel = document.getElementById('mappingExcel').value;
     const years = getSelectedYears().join(',');
     const dest = document.getElementById('dest').value;
     const unmatchedDir = document.getElementById('unmatchedDir').value || '_REVISION';
-    if (!source) {
-        showToast('Especifica una carpeta origen', 'error');
+    const mode = document.getElementById('organizeBy').value;
+    if (!source.trim() && !sources.trim()) {
+        showToast('Especifica al menos una carpeta origen', 'error');
+        return;
+    }
+    if (mode === 'factusol-client-budget' && !mappingExcel.trim()) {
+        showToast('Selecciona el Excel simplificado de FactuSOL', 'error');
+        return;
+    }
+    if (mode === 'factusol-client-budget' && !dest.trim()) {
+        showToast('Debes especificar una carpeta destino', 'error');
+        return;
+    }
+    if (mode === 'factusol-client-budget' && getSelectedYears().length === 0) {
+        showToast('Selecciona al menos un ano', 'error');
         return;
     }
     const modal = document.getElementById('previewModal');
@@ -306,6 +332,7 @@ async function doPreview() {
     try {
         const params = new URLSearchParams({
             source,
+            sources,
             projects,
             mapping_excel: mappingExcel,
             years,
@@ -474,6 +501,7 @@ function escapeHtml(value) {
 function loadConfig() {
     const saved = JSON.parse(localStorage.getItem('reorganizer_config') || '{}');
     if (saved.source) document.getElementById('source').value = saved.source;
+    if (saved.sources) document.getElementById('sources').value = saved.sources;
     if (saved.dest) document.getElementById('dest').value = saved.dest;
     if (saved.mappingExcel) document.getElementById('mappingExcel').value = saved.mappingExcel;
     if (saved.years) setSelectedYears(saved.years);
@@ -494,6 +522,7 @@ function loadConfig() {
 function saveConfig() {
     const config = {
         source: document.getElementById('source').value,
+        sources: document.getElementById('sources').value,
         dest: document.getElementById('dest').value,
         mappingExcel: document.getElementById('mappingExcel').value,
         years: getSelectedYears(),
@@ -513,9 +542,18 @@ function saveConfig() {
     localStorage.setItem('reorganizer_config', JSON.stringify(config));
 }
 
-['source', 'dest', 'mappingExcel', 'year2025', 'year2026', 'organizeBy', 'moveFiles', 'dryRun', 'minSize', 'extensions', 'projectFilter', 'unmatchedDir', 'requireBudgetMatch', 'threads', 'processes', 'conflict', 'dedup'].forEach((id) => {
+['source', 'sources', 'dest', 'mappingExcel', 'year2025', 'year2026', 'organizeBy', 'moveFiles', 'dryRun', 'minSize', 'extensions', 'projectFilter', 'unmatchedDir', 'requireBudgetMatch', 'threads', 'processes', 'conflict', 'dedup'].forEach((id) => {
     const element = document.getElementById(id);
-    if (element) element.addEventListener('change', saveConfig);
+    if (element) {
+        element.addEventListener('change', () => {
+            saveConfig();
+            updatePreflight();
+        });
+        element.addEventListener('input', () => {
+            saveConfig();
+            updatePreflight();
+        });
+    }
 });
 
 function resetProgress() {
@@ -526,6 +564,45 @@ function resetProgress() {
     statNoEncontrado.innerText = '0';
     statAmbiguo.innerText = '0';
     statErrors.innerText = '0';
+}
+
+function updatePreflight() {
+    const panel = document.getElementById('preflightPanel');
+    const list = document.getElementById('preflightItems');
+    if (!panel || !list) return;
+
+    const mode = document.getElementById('organizeBy').value;
+    const hasSource = Boolean(
+        document.getElementById('source').value.trim() ||
+        document.getElementById('sources').value.trim()
+    );
+    const checks = [
+        { ok: hasSource, text: 'Al menos un origen seleccionado' },
+    ];
+    if (mode === 'factusol-client-budget') {
+        checks.push(
+            { ok: Boolean(document.getElementById('dest').value.trim()), text: 'Destino seleccionado' },
+            { ok: Boolean(document.getElementById('mappingExcel').value.trim()), text: 'Excel FactuSOL seleccionado' },
+            { ok: getSelectedYears().length > 0, text: 'Al menos un ano marcado' },
+        );
+    } else if (document.getElementById('dest').value.trim()) {
+        checks.push({ ok: true, text: 'Destino seleccionado' });
+    }
+
+    const ready = checks.every((item) => item.ok);
+    panel.dataset.ready = ready ? 'true' : 'false';
+    panel.querySelector('.preflight-title').textContent = ready
+        ? 'Listo para previsualizar'
+        : 'Faltan datos para ejecutar';
+    list.innerHTML = checks.map((item) => `
+        <div class="preflight-item ${item.ok ? 'ok' : 'pending'}">
+            <span>${item.ok ? 'OK' : '--'}</span>
+            <span>${item.text}</span>
+        </div>
+    `).join('');
+    startBtn.disabled = !ready;
+    previewBtn.disabled = mode === 'factusol-client-budget' ? !ready : !hasSource;
+    realCopyBtn.disabled = !ready;
 }
 
 // ============================================================
@@ -539,6 +616,7 @@ async function startScan() {
 
     const config = {
         source: document.getElementById('source').value,
+        sources: document.getElementById('sources').value,
         dest: document.getElementById('dest').value,
         organize_by: document.getElementById('organizeBy').value,
         mapping_excel: document.getElementById('mappingExcel').value,
@@ -556,9 +634,14 @@ async function startScan() {
         dedup: document.getElementById('dedup').checked,
     };
 
-    if (!config.source) {
-        showToast('Debes especificar una carpeta origen', 'error');
+    if (!config.source.trim() && !config.sources.trim()) {
+        showToast('Debes especificar al menos una carpeta origen', 'error');
         setRuntimeState('error', 'Falta origen');
+        return;
+    }
+    if (config.organize_by === 'factusol-client-budget' && getSelectedYears().length === 0) {
+        showToast('Selecciona al menos un ano', 'error');
+        setRuntimeState('error', 'Falta ano');
         return;
     }
     if (config.organize_by === 'factusol-client-budget' && !config.mapping_excel) {
@@ -605,7 +688,16 @@ async function startScan() {
     }
 }
 
+function startDryRunScan() {
+    document.getElementById('dryRun').checked = true;
+    saveConfig();
+    startScan();
+}
+
 function startRealCopy() {
+    if (!confirm('Vas a copiar archivos al destino seleccionado. Ejecuta primero una previsualizacion o simulacion si tienes dudas.')) {
+        return;
+    }
     document.getElementById('dryRun').checked = false;
     saveConfig();
     startScan();
@@ -685,12 +777,15 @@ function setLoading(isLoading) {
     if (isLoading) {
         startBtn.classList.add('hidden');
         if (previewBtn) previewBtn.classList.add('hidden');
+        if (realCopyBtn) realCopyBtn.classList.add('hidden');
         stopBtn.classList.remove('hidden');
         stopBtn.disabled = false;
     } else {
         startBtn.classList.remove('hidden');
         if (previewBtn) previewBtn.classList.remove('hidden');
+        if (realCopyBtn) realCopyBtn.classList.remove('hidden');
         stopBtn.classList.add('hidden');
+        updatePreflight();
     }
 }
 
@@ -723,7 +818,7 @@ function switchTab(tabName) {
 
 async function loadHistory(page = 1) {
     const tbody = document.querySelector('#historyTable tbody');
-    tbody.innerHTML = '<tr><td colspan="5">Cargando...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7">Cargando...</td></tr>';
 
     try {
         const response = await fetch(`/api/history?page=${page}&page_size=50`);
@@ -731,26 +826,26 @@ async function loadHistory(page = 1) {
 
         tbody.innerHTML = '';
         if (data.items.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5">No hay historial reciente</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7">No hay historial reciente</td></tr>';
             renderPagination(0, page, 50);
             return;
         }
 
         data.items.forEach((item) => {
             const row = document.createElement('tr');
-            const dateCell = document.createElement('td');
-            dateCell.textContent = item.created_time || '';
+            const makeCell = (value, className = '') => {
+                const cell = document.createElement('td');
+                cell.textContent = value || '';
+                cell.title = value || '';
+                if (className) cell.className = className;
+                return cell;
+            };
 
-            const fileCell = document.createElement('td');
-            fileCell.title = item.file_name || '';
-            fileCell.textContent = item.file_name || '';
-
-            const actionCell = document.createElement('td');
-            actionCell.textContent = item.action || '';
-
-            const statusCell = document.createElement('td');
-            statusCell.textContent = item.action_status || '';
-            if (item.action_status === 'error') statusCell.classList.add('error-text');
+            const status = item.match_status || item.action_status || item.action || '';
+            const statusCell = makeCell(status);
+            if (item.action_status === 'error' || ['AMBIGUO', 'NO_ENCONTRADO_EN_EXCEL'].includes(status)) {
+                statusCell.classList.add('error-text');
+            }
 
             const copyCell = document.createElement('td');
             const copyButton = document.createElement('button');
@@ -758,17 +853,25 @@ async function loadHistory(page = 1) {
             copyButton.type = 'button';
             copyButton.title = 'Copiar ruta';
             copyButton.innerHTML = '<svg viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1"/><path d="M3 11V3a1 1 0 0 1 1-1h8"/></svg>';
-            copyButton.addEventListener('click', () => copyPath(copyButton, item.src_path || ''));
+            copyButton.addEventListener('click', () => copyPath(copyButton, item.dst_path || item.src_path || ''));
             copyCell.appendChild(copyButton);
 
-            row.append(dateCell, fileCell, actionCell, statusCell, copyCell);
+            row.append(
+                makeCell(item.created_time || ''),
+                makeCell(item.file_name || ''),
+                makeCell(item.presupuesto_detectado || item.proyecto || ''),
+                makeCell(item.cliente || item.gestor || ''),
+                statusCell,
+                makeCell(item.dst_path || '', 'path-cell'),
+                copyCell,
+            );
             tbody.appendChild(row);
         });
 
         renderPagination(data.total, page, data.page_size);
     } catch (err) {
         showToast('Error al cargar historial', 'error');
-        tbody.innerHTML = `<tr><td colspan="5" class="error-text">Error: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="error-text">Error: ${err.message}</td></tr>`;
     }
 }
 
@@ -869,8 +972,25 @@ async function loadReport() {
 // ============================================================
 
 async function browseFolder(inputId) {
+    openBrowseModal(inputId, 'folder');
+}
+
+async function browseFile(inputId, fileExtensions = '') {
+    openBrowseModal(inputId, 'file', fileExtensions);
+}
+
+function openBrowseModal(inputId, mode, fileExtensions = '') {
     targetInputId = inputId;
+    browseMode = mode;
+    browseFileExtensions = fileExtensions;
+    selectedBrowseFilePath = mode === 'file' ? document.getElementById(inputId).value.trim() : "";
+
     const modal = document.getElementById('browseModal');
+    const title = modal.querySelector('.modal-bar h2');
+    const selectBtn = document.getElementById('selectCurrentBtn');
+    title.textContent = mode === 'file' ? 'Seleccionar archivo' : 'Seleccionar carpeta';
+    selectBtn.textContent = mode === 'file' ? 'Usar archivo seleccionado' : 'Usar esta carpeta';
+    selectBtn.disabled = mode === 'file' && !selectedBrowseFilePath;
     modal.classList.add('active');
 
     const currentVal = document.getElementById(inputId).value;
@@ -889,12 +1009,18 @@ async function loadPath(path) {
     list.innerHTML = '<div class="folder-item">Cargando...</div>';
 
     try {
-        const response = await fetch(`/api/browse?path=${encodeURIComponent(path)}`);
+        const params = new URLSearchParams({
+            path,
+            include_files: browseMode === 'file' ? 'true' : 'false',
+            file_extensions: browseFileExtensions,
+        });
+        const response = await fetch(`/api/browse?${params.toString()}`);
         if (!response.ok) throw new Error('No se pudo cargar la ruta');
 
         const data = await response.json();
         currentBrowsePath = data.current;
-        pathInput.value = data.current;
+        pathInput.value = selectedBrowseFilePath || data.current;
+        updateBrowseSelectButton();
 
         if (data.parent) {
             upBtn.disabled = false;
@@ -904,18 +1030,36 @@ async function loadPath(path) {
         }
 
         list.innerHTML = '';
+        if (data.items.length === 0) {
+            list.innerHTML = '<div class="folder-item empty">No hay elementos disponibles</div>';
+            return;
+        }
         data.items.forEach((item) => {
             const div = document.createElement('div');
-            div.className = 'folder-item';
+            const isFile = item.type === 'file';
+            div.className = `folder-item ${isFile ? 'file-item' : 'dir-item'} ${item.path === selectedBrowseFilePath ? 'selected' : ''}`;
             div.innerHTML = `
                 <span class="folder-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24">
-                        <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path>
-                    </svg>
+                    ${isFile
+                        ? '<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v5h4"></path></svg>'
+                        : '<svg viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path></svg>'
+                    }
                 </span>
-                <span>${item.name}</span>
+                <span>${escapeHtml(item.name)}</span>
+                <span class="folder-meta">${isFile ? 'archivo' : 'carpeta'}</span>
             `;
-            div.onclick = () => loadPath(item.path);
+            div.onclick = () => {
+                if (isFile) {
+                    selectedBrowseFilePath = item.path;
+                    pathInput.value = item.path;
+                    document.querySelectorAll('.folder-item.selected').forEach((node) => node.classList.remove('selected'));
+                    div.classList.add('selected');
+                    updateBrowseSelectButton();
+                } else {
+                    if (browseMode === 'file') selectedBrowseFilePath = "";
+                    loadPath(item.path);
+                }
+            };
             list.appendChild(div);
         });
     } catch (err) {
@@ -923,10 +1067,18 @@ async function loadPath(path) {
     }
 }
 
+function updateBrowseSelectButton() {
+    const selectBtn = document.getElementById('selectCurrentBtn');
+    if (!selectBtn) return;
+    selectBtn.disabled = browseMode === 'file' ? !selectedBrowseFilePath : !currentBrowsePath;
+}
+
 function selectCurrentFolder() {
-    if (targetInputId && currentBrowsePath) {
-        document.getElementById(targetInputId).value = currentBrowsePath;
+    const selectedPath = browseMode === 'file' ? selectedBrowseFilePath : currentBrowsePath;
+    if (targetInputId && selectedPath) {
+        document.getElementById(targetInputId).value = selectedPath;
         saveConfig();
+        updatePreflight();
         closeBrowseModal();
     }
 }

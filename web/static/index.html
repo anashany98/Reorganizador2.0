@@ -34,72 +34,82 @@
             <span id="statusText">Listo</span>
         </div>
 
-        <!-- Source -->
-        <div class="field">
-            <label for="source">Origen</label>
-            <div class="input-row">
-                <input type="text" id="source" placeholder="C:\Gestores\2025" spellcheck="false">
-                <button class="btn-icon" type="button" onclick="browseFolder('source')" title="Explorar">
-                    <svg viewBox="0 0 16 16"><path d="M1.5 3.5A1.5 1.5 0 013 2h2.5l1.5 1.5H13A1.5 1.5 0 0114.5 5v6A1.5 1.5 0 0113 12.5H3A1.5 1.5 0 011.5 11z"/></svg>
-                </button>
+        <div class="flow-steps">
+            <span>1 Origen</span>
+            <span>2 Excel</span>
+            <span>3 Revisar</span>
+            <span>4 Copiar</span>
+        </div>
+
+        <section class="config-section">
+            <div class="section-title">Origen y destino</div>
+            <div class="field">
+                <label for="source">Carpeta origen principal</label>
+                <div class="input-row">
+                    <input type="text" id="source" placeholder="R:\Gestores" spellcheck="false">
+                    <button class="btn-icon" type="button" onclick="browseFolder('source')" title="Explorar carpeta origen">
+                        <svg viewBox="0 0 16 16"><path d="M1.5 3.5A1.5 1.5 0 013 2h2.5l1.5 1.5H13A1.5 1.5 0 0114.5 5v6A1.5 1.5 0 0113 12.5H3A1.5 1.5 0 011.5 11z"/></svg>
+                    </button>
+                </div>
             </div>
-        </div>
 
-        <!-- Destination -->
-        <div class="field">
-            <label for="dest">Destino</label>
-            <div class="input-row">
-                <input type="text" id="dest" placeholder="D:\Organizado" spellcheck="false">
-                <button class="btn-icon" type="button" onclick="browseFolder('dest')" title="Explorar">
-                    <svg viewBox="0 0 16 16"><path d="M1.5 3.5A1.5 1.5 0 013 2h2.5l1.5 1.5H13A1.5 1.5 0 0114.5 5v6A1.5 1.5 0 0113 12.5H3A1.5 1.5 0 011.5 11z"/></svg>
-                </button>
+            <details class="inline-details">
+                <summary>Varias carpetas origen</summary>
+                <div class="field">
+                    <label for="sources">Origenes adicionales</label>
+                    <textarea id="sources" rows="3" placeholder="R:\Gestores\2025&#10;R:\Gestores\2026" class="input-sm" spellcheck="false"></textarea>
+                    <p class="field-help">Una ruta por linea, o separadas por punto y coma.</p>
+                </div>
+            </details>
+
+            <div class="field">
+                <label for="dest">Carpeta destino</label>
+                <div class="input-row">
+                    <input type="text" id="dest" placeholder="D:\Presupuestos_Organizados" spellcheck="false">
+                    <button class="btn-icon" type="button" onclick="browseFolder('dest')" title="Explorar carpeta destino">
+                        <svg viewBox="0 0 16 16"><path d="M1.5 3.5A1.5 1.5 0 013 2h2.5l1.5 1.5H13A1.5 1.5 0 0114.5 5v6A1.5 1.5 0 0113 12.5H3A1.5 1.5 0 011.5 11z"/></svg>
+                    </button>
+                </div>
             </div>
-        </div>
+        </section>
 
-        <div class="field">
-            <label for="mappingExcel">Excel FactuSOL</label>
-            <input type="text" id="mappingExcel" placeholder="C:\Temp\factusol_mapping_app_simplificado.xlsx" spellcheck="false">
-        </div>
-
-        <div class="field">
-            <label>Años</label>
-            <div class="year-row">
-                <label class="check-pill"><input type="checkbox" id="year2025" checked><span>2025</span></label>
-                <label class="check-pill"><input type="checkbox" id="year2026" checked><span>2026</span></label>
+        <section class="config-section">
+            <div class="section-title">Fuente de verdad</div>
+            <div class="field">
+                <label for="mappingExcel">Excel simplificado FactuSOL</label>
+                <div class="input-row">
+                    <input type="text" id="mappingExcel" placeholder="C:\Temp\factusol_mapping_app_simplificado.xlsx" spellcheck="false">
+                    <button class="btn-icon" type="button" onclick="browseFile('mappingExcel', '.xlsx,.xls,.xlsm')" title="Seleccionar Excel">
+                        <svg viewBox="0 0 16 16"><path d="M3 2.5h6l4 4V13a1 1 0 01-1 1H3.8A1.8 1.8 0 012 12.2V4.3A1.8 1.8 0 013.8 2.5z"/><path d="M9 2.5V7h4"/></svg>
+                    </button>
+                </div>
             </div>
-        </div>
 
-        <!-- Strategy -->
-        <div class="field">
-            <label for="organizeBy">Estrategia</label>
-            <select id="organizeBy">
-                <option value="factusol-client-budget">FactuSOL cliente + presupuesto</option>
-                <option value="type-date">Tipo + Fecha</option>
-                <option value="date">Fecha</option>
-                <option value="type">Tipo</option>
-                <option value="hierarchical-type-ext">Jerarquica + Tipo</option>
-                <option value="project-type">Proyecto + Categoria (sin gestor)</option>
-                <option value="flat">Plano (espejo)</option>
-            </select>
-        </div>
+            <div class="field">
+                <label>Años a procesar</label>
+                <div class="year-row">
+                    <label class="check-pill"><input type="checkbox" id="year2025" checked><span>2025</span></label>
+                    <label class="check-pill"><input type="checkbox" id="year2026" checked><span>2026</span></label>
+                </div>
+            </div>
 
-        <!-- Toggles -->
-        <div class="toggles">
-            <label class="toggle">
-                <input type="checkbox" id="moveFiles">
-                <span class="toggle-track"></span>
-                <span class="toggle-text">Mover (no copiar)</span>
-            </label>
-            <label class="toggle">
-                <input type="checkbox" id="dryRun" checked>
-                <span class="toggle-track"></span>
-                <span class="toggle-text">Simulacion segura</span>
-            </label>
-        </div>
+            <div class="field">
+                <label for="organizeBy">Modo</label>
+                <select id="organizeBy">
+                    <option value="factusol-client-budget">FactuSOL cliente + presupuesto</option>
+                    <option value="type-date">Tipo + Fecha</option>
+                    <option value="date">Fecha</option>
+                    <option value="type">Tipo</option>
+                    <option value="hierarchical-type-ext">Jerarquica + Tipo</option>
+                    <option value="project-type">Proyecto + Categoria (sin gestor)</option>
+                    <option value="flat">Plano (espejo)</option>
+                </select>
+            </div>
+        </section>
 
         <!-- Filters -->
         <details class="filters">
-            <summary>Filtros</summary>
+            <summary>Opciones avanzadas</summary>
             <div class="field">
                 <label for="minSize">Tamano minimo (MB)</label>
                 <input type="number" id="minSize" value="0" step="0.1" class="input-sm">
@@ -116,6 +126,12 @@
                 <label for="unmatchedDir">Carpeta revision</label>
                 <input type="text" id="unmatchedDir" value="_REVISION" class="input-sm" spellcheck="false">
             </div>
+            <label class="toggle">
+                <input type="checkbox" id="moveFiles">
+                <span class="toggle-track"></span>
+                <span class="toggle-text">Mover en vez de copiar</span>
+            </label>
+            <input type="checkbox" id="dryRun" checked class="hidden">
             <label class="toggle">
                 <input type="checkbox" id="requireBudgetMatch">
                 <span class="toggle-track"></span>
@@ -145,6 +161,11 @@
             </div>
             </details>
 
+        <div class="preflight" id="preflightPanel">
+            <div class="preflight-title">Preparado para previsualizar</div>
+            <div class="preflight-items" id="preflightItems"></div>
+        </div>
+
         <!-- Presets -->
         <div class="presets-row" id="presetsRow">
             <label class="preset-label">Presets</label>
@@ -168,14 +189,14 @@
                     <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M11 11l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
                     Previsualizar
                 </button>
-                <button id="startBtn" class="btn btn-primary" type="button" onclick="startScan()" title="Iniciar escaneo (Ctrl+Enter)">
+                <button id="startBtn" class="btn btn-primary" type="button" onclick="startDryRunScan()" title="Generar auditoria dry-run (Ctrl+Enter)">
                     <svg viewBox="0 0 16 16"><polygon points="4,2 14,8 4,14"/></svg>
-                    Ejecutar
+                    Simular
                 </button>
             </div>
-            <button id="realCopyBtn" class="btn btn-secondary" type="button" onclick="startRealCopy()">
+            <button id="realCopyBtn" class="btn btn-danger-soft" type="button" onclick="startRealCopy()">
                 <svg viewBox="0 0 16 16"><path d="M3 8h10M9 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                Ejecutar copia real
+                Copiar archivos
             </button>
             <button id="auditBtn" class="btn btn-ghost" type="button" onclick="downloadAudit()">
                 <svg viewBox="0 0 16 16"><path d="M8 1v10M4 8l4 4 4-4M2 14h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -251,8 +272,10 @@
                         <tr>
                             <th>Fecha</th>
                             <th>Archivo</th>
-                            <th>Accion</th>
-                            <th>Estado</th>
+                            <th>Presupuesto</th>
+                            <th>Cliente</th>
+                            <th>Match</th>
+                            <th>Destino</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -322,7 +345,7 @@
         <div class="modal-list" id="folderList"></div>
         <div class="modal-actions">
             <button class="btn btn-ghost" type="button" onclick="closeBrowseModal()">Cancelar</button>
-            <button class="btn btn-primary" type="button" onclick="selectCurrentFolder()">Usar esta carpeta</button>
+            <button class="btn btn-primary" id="selectCurrentBtn" type="button" onclick="selectCurrentFolder()">Usar esta carpeta</button>
         </div>
     </div>
 </div>
