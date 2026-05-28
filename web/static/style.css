@@ -44,8 +44,8 @@ body {
 
 input, select, button, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: none; padding: 0; }
-input, select { background: var(--surface); border: 1px solid var(--border); }
-input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+input, select, textarea { background: var(--surface); border: 1px solid var(--border); }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 table { border-collapse: collapse; width: 100%; }
 
 .hidden { display: none !important; }
@@ -150,6 +150,71 @@ body[data-runtime="complete"] .status-pulse { background: var(--ok); }
 @keyframes pulse {
     0%, 100% { opacity: 1; transform: scale(1); }
     50%      { opacity: 0.4; transform: scale(1.5); }
+}
+
+/* Flow */
+.flow-steps {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+}
+
+.flow-steps span {
+    min-width: 0;
+    padding: 6px 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: #0a0f15;
+    color: var(--text-soft);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+/* Config blocks */
+.config-section {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: #0b1118;
+}
+
+.section-title {
+    color: var(--accent);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.inline-details {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.inline-details summary {
+    padding: 9px 10px;
+    color: var(--text-soft);
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 600;
+    list-style: none;
+}
+
+.inline-details summary::-webkit-details-marker { display: none; }
+.inline-details[open] summary { border-bottom: 1px solid var(--border); }
+.inline-details .field { padding: 10px; }
+
+.field-help {
+    color: var(--text-dim);
+    font-size: 0.76rem;
 }
 
 /* Fields */
@@ -383,6 +448,18 @@ body[data-runtime="complete"] .status-pulse { background: var(--ok); }
 
 .btn-danger:hover { filter: brightness(1.1); }
 
+.btn-danger-soft {
+    background: rgba(244, 75, 103, 0.10);
+    border-color: rgba(244, 75, 103, 0.55);
+    color: #ff8fa2;
+}
+
+.btn-danger-soft:hover {
+    background: rgba(244, 75, 103, 0.18);
+    border-color: var(--err);
+    color: #fff;
+}
+
 .btn-ghost {
     background: transparent;
     border-color: var(--border);
@@ -396,6 +473,60 @@ body[data-runtime="complete"] .status-pulse { background: var(--ok); }
 }
 
 .btn-xs { padding: 6px 12px; font-size: 0.78rem; }
+
+.btn:disabled,
+.btn-icon:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
+    filter: grayscale(0.35);
+}
+
+/* Preflight */
+.preflight {
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: #0a0f15;
+}
+
+.preflight[data-ready="true"] {
+    border-color: rgba(20, 224, 168, 0.45);
+}
+
+.preflight[data-ready="false"] {
+    border-color: rgba(240, 168, 40, 0.45);
+}
+
+.preflight-title {
+    margin-bottom: 8px;
+    color: var(--text);
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.preflight-items {
+    display: grid;
+    gap: 5px;
+}
+
+.preflight-item {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-soft);
+    font-size: 0.78rem;
+}
+
+.preflight-item span:first-child {
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+}
+
+.preflight-item.ok span:first-child { color: var(--ok); }
+.preflight-item.pending span:first-child { color: var(--warn); }
 
 /* ============================================================
    MAIN AREA
@@ -590,6 +721,10 @@ td {
     font-size: 0.84rem;
     border-bottom: 1px solid rgba(255,255,255,0.03);
     color: var(--text-soft);
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 tr:last-child td { border-bottom: none; }
@@ -726,11 +861,41 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 
 .folder-item:hover { background: var(--elevated); color: var(--text); }
 
+.folder-item.selected {
+    background: rgba(20, 224, 168, 0.12);
+    color: var(--text);
+    outline: 1px solid rgba(20, 224, 168, 0.45);
+}
+
+.folder-item.empty {
+    cursor: default;
+    color: var(--text-dim);
+}
+
+.folder-item.empty:hover {
+    background: transparent;
+    color: var(--text-dim);
+}
+
 .folder-item svg {
     width: 16px; height: 16px;
     fill: none; stroke: var(--accent);
     stroke-width: 1.5;
     flex-shrink: 0;
+}
+
+.folder-meta {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.path-cell {
+    max-width: 520px;
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
 }
 
 .modal-actions {
@@ -784,9 +949,13 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 }
 
 .sidebar.collapsed .logo-text,
+.sidebar.collapsed .flow-steps,
+.sidebar.collapsed .config-section,
 .sidebar.collapsed .field,
 .sidebar.collapsed .toggles,
 .sidebar.collapsed .filters,
+.sidebar.collapsed .inline-details,
+.sidebar.collapsed .preflight,
 .sidebar.collapsed .presets-row,
 .sidebar.collapsed .status-bar,
 .sidebar.collapsed .actions {
@@ -1190,12 +1359,24 @@ tr:hover td { background: rgba(255,255,255,0.02); }
     }
 
     .sidebar.collapsed .logo-text,
+    .sidebar.collapsed .flow-steps,
+    .sidebar.collapsed .config-section,
     .sidebar.collapsed .field,
     .sidebar.collapsed .toggles,
     .sidebar.collapsed .filters,
+    .sidebar.collapsed .inline-details,
+    .sidebar.collapsed .preflight,
     .sidebar.collapsed .presets-row,
     .sidebar.collapsed .status-bar {
         display: flex;
+    }
+
+    .sidebar.collapsed .flow-steps {
+        display: grid;
+    }
+
+    .sidebar.collapsed .preflight {
+        display: block;
     }
 
     .sidebar.collapsed .sidebar-toggle {

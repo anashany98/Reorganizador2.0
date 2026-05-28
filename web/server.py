@@ -3,7 +3,7 @@ import os
 import sys
 import threading
 from pathlib import Path
-from typing import Literal
+from typing import Iterable, Literal
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -117,6 +117,7 @@ job_state = JobState()
 
 class ScanConfig(BaseModel):
     source: str
+    sources: str = ""
     dest: str = ""
     organize_by: OrganizeBy = OrganizeBy.TYPE_DATE
     move: bool = False
@@ -135,7 +136,7 @@ class ScanConfig(BaseModel):
     dedup: bool = False
 
 
-def _build_processing_options(config_data: ScanConfig, source: Path, dest: Path | None) -> ProcessingOptions:
+def _build_processing_options(config_data: ScanConfig, source_root: Path, dest: Path | None) -> ProcessingOptions:
     factusol_index = None
     if config_data.organize_by == OrganizeBy.FACTUSOL_CLIENT_BUDGET:
         if not config_data.mapping_excel:
@@ -143,7 +144,7 @@ def _build_processing_options(config_data: ScanConfig, source: Path, dest: Path 
         factusol_index = factusol_mapping.load_mapping(Path(config_data.mapping_excel))
 
     return ProcessingOptions(
-        source_root=source,
+        source_root=source_root,
         dest_root=dest,
         organize_by=config_data.organize_by,
         move_files=config_data.move,
@@ -167,13 +168,14 @@ def run_scan_task(config_data: ScanConfig) -> None:
     logger.info("Starting scan task: %s", config_data.model_dump())
 
     try:
-        source = Path(config_data.source).resolve()
+        sources = _parse_source_paths(config_data.source, config_data.sources)
+        source_root = _common_source_root(sources)
         dest = Path(config_data.dest).resolve() if config_data.dest else None
 
         if dest:
             dest.mkdir(parents=True, exist_ok=True)
 
-        options = _build_processing_options(config_data, source, dest)
+        options = _build_processing_options(config_data, source_root, dest)
         csv_sink = CsvSink(WEB_CSV_PATH)
         sqlite_sink = SQLiteSink(WEB_DB_PATH)
 
@@ -188,7 +190,7 @@ def run_scan_task(config_data: ScanConfig) -> None:
         )
         batch_processor = BatchProcessor(processor, sink_manager)
 
-        raw_files = file_utils.iter_files(source)
+        raw_files = (path for source in sources for path in file_utils.iter_files(source))
         filtered_files = []
 
         ext_set = {
@@ -220,7 +222,7 @@ def run_scan_task(config_data: ScanConfig) -> None:
             before = len(filtered_files)
             filtered_files = [
                 p for p in filtered_files
-                if file_utils.path_matches_project_filter(p, source, project_set)
+                if file_utils.path_matches_project_filter(p, source_root, project_set)
             ]
             logger.info(
                 "Project filter: %d → %d files (%d projects)",
@@ -253,13 +255,26 @@ async def read_root() -> FileResponse:
 
 
 @app.get("/api/browse")
-async def browse(path: str = "") -> dict:
+async def browse(
+    path: str = "",
+    include_files: bool = False,
+    file_extensions: str = "",
+) -> dict:
     """List directories in the given path."""
     try:
         candidate = Path(path).resolve() if path else Path.home().resolve()
+        if candidate.is_file():
+            candidate = candidate.parent
         if not candidate.exists() or not candidate.is_dir():
             raise HTTPException(status_code=404, detail="Path not found or not a directory")
 
+        allowed_extensions = {
+            extension.strip().lower()
+            if extension.strip().startswith(".")
+            else f".{extension.strip().lower()}"
+            for extension in file_extensions.split(",")
+            if extension.strip()
+        }
         items = []
         try:
             for item in candidate.iterdir():
@@ -271,10 +286,20 @@ async def browse(path: str = "") -> dict:
                             "type": "dir",
                         }
                     )
+                elif include_files and item.is_file():
+                    if allowed_extensions and item.suffix.lower() not in allowed_extensions:
+                        continue
+                    items.append(
+                        {
+                            "name": item.name,
+                            "path": str(item),
+                            "type": "file",
+                        }
+                    )
         except PermissionError:
             pass
 
-        items.sort(key=lambda entry: entry["name"].lower())
+        items.sort(key=lambda entry: (entry["type"] != "dir", entry["name"].lower()))
 
         return {
             "current": str(candidate),
@@ -293,7 +318,8 @@ async def start_scan(config: ScanConfig, background_tasks: BackgroundTasks) -> d
     if job_state.active:
         raise HTTPException(status_code=400, detail="Job already running")
 
-    if not os.path.exists(config.source):
+    sources = _parse_source_paths(config.source, config.sources)
+    if not sources or any(not source.exists() or not source.is_dir() for source in sources):
         raise HTTPException(status_code=404, detail="Source directory not found")
 
     job_state.reset()
@@ -476,6 +502,7 @@ async def download_audit():
 @app.get("/api/preview")
 async def preview_source(
     source: str = "",
+    sources: str = "",
     projects: str = "",
     mapping_excel: str = "",
     years: str = "",
@@ -486,11 +513,12 @@ async def preview_source(
     from pathlib import Path
     import sqlite3
 
-    src = Path(source).resolve() if source else None
-    if not src or not src.exists():
+    source_paths = _parse_source_paths(source, sources)
+    if not source_paths or any(not src.exists() or not src.is_dir() for src in source_paths):
         return {"error": "Origen no valido", "total_files": 0}
+    source_root = _common_source_root(source_paths)
 
-    all_files = list(file_utils.iter_files(src))
+    all_files = [path for src in source_paths for path in file_utils.iter_files(src)]
     if not all_files:
         return {"error": "", "total_files": 0, "pending": 0, "total_size_bytes": 0,
                 "extensions": {}, "gestores": {}, "proyectos": {}}
@@ -498,7 +526,7 @@ async def preview_source(
     # Filtro de proyectos
     project_set = file_utils.parse_project_filter(projects)
     if project_set:
-        all_files = [f for f in all_files if file_utils.path_matches_project_filter(f, src, project_set)]
+        all_files = [f for f in all_files if file_utils.path_matches_project_filter(f, source_root, project_set)]
 
     total = len(all_files)
     total_bytes = 0
@@ -513,7 +541,7 @@ async def preview_source(
             pass
         ext = f.suffix.lower().lstrip(".") or "sin_ext"
         ext_count[ext] = ext_count.get(ext, 0) + 1
-        gestor, proyecto = file_utils.extract_manager_project(f, src)
+        gestor, proyecto = file_utils.extract_manager_project(f, source_root)
         if gestor:
             gestor_count[gestor] = gestor_count.get(gestor, 0) + 1
         if proyecto:
@@ -542,8 +570,41 @@ async def preview_source(
         "proyectos": dict(sorted(proyecto_count.items(), key=lambda x: -x[1])[:15]),
     }
     if mapping_excel:
-        result.update(_build_factusol_preview(all_files, src, mapping_excel, years, dest, unmatched_dir))
+        result.update(_build_factusol_preview(all_files, source_root, mapping_excel, years, dest, unmatched_dir))
     return result
+
+
+def _parse_source_paths(source: str = "", sources: str = "") -> list[Path]:
+    raw_values: list[str] = []
+    if source and source.strip():
+        raw_values.append(source.strip())
+    if sources and sources.strip():
+        raw_values.extend(
+            item.strip()
+            for chunk in sources.replace("\n", ";").split(";")
+            for item in chunk.split(",")
+            if item.strip()
+        )
+
+    result: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        resolved = Path(raw).resolve()
+        key = str(resolved).lower()
+        if key not in seen:
+            seen.add(key)
+            result.append(resolved)
+    return result
+
+
+def _common_source_root(sources: Iterable[Path]) -> Path:
+    materialized = list(sources)
+    if len(materialized) == 1:
+        return materialized[0]
+    try:
+        return Path(os.path.commonpath([str(source) for source in materialized])).resolve()
+    except ValueError:
+        return materialized[0]
 
 
 def _parse_years(raw: str | None) -> set[str] | None:
