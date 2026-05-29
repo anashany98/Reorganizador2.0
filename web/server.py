@@ -627,9 +627,14 @@ def _build_factusol_preview(
     dest_root = Path(dest).resolve() if dest else Path("DESTINO").resolve()
     counters = {
         "OK": 0,
+        "OK_NUMERO_UNICO": 0,
+        "OK_ANIO_SERIE_PRESUPUESTO": 0,
+        "OK_CLAVEAPP": 0,
         "SIN_NUMERO_PRESUPUESTO": 0,
         "NO_ENCONTRADO_EN_EXCEL": 0,
         "AMBIGUO": 0,
+        "AMBIGUO_SERIE": 0,
+        "SERIE_NO_ENCONTRADA": 0,
         "ERRORES": 0,
     }
     items = []
@@ -657,12 +662,16 @@ def _build_factusol_preview(
                     "file_name": file_path.name,
                     "src_path": str(file_path),
                     "presupuesto_detectado": match.presupuesto_detectado or "",
+                    "serie_detectada": match.serie_detectada,
+                    "serie_excel": match.serie_excel,
+                    "clave_app": match.clave_app,
                     "cliente": match.cliente,
                     "sede_hotel_direccion": match.sede_hotel_direccion,
                     "referencia": match.referencia,
                     "tipo_documento": match.tipo_documento,
                     "match_status": match.status,
                     "match_confidence": round(match.confidence, 4),
+                    "match_reason": match.reason,
                     "dst_path": str(dst_path),
                 }
             )

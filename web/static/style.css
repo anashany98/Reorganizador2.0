@@ -1422,3 +1422,49 @@ tr:hover td { background: rgba(255,255,255,0.02); }
     .report-grid { grid-template-columns: 1fr; }
     .modal { max-height: 90vh; }
 }
+
+/* ============================================================
+   FILE TYPE FILTER GRID
+   ============================================================ */
+
+.file-type-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.file-type-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.15s;
+}
+
+.file-type-check:hover {
+    border-color: var(--border-hi);
+    background: var(--border);
+}
+
+.file-type-check input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.file-type-check input[type="checkbox"]:checked + span {
+    color: var(--accent);
+}
+
+.file-type-check input[type="checkbox"]:not(:checked) + span {
+    color: var(--text-soft);
+    text-decoration: line-through;
+    opacity: 0.6;
+}

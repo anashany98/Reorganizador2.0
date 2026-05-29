@@ -81,6 +81,21 @@ def safe_makedirs(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+# Files to skip (system/hidden/temporary)
+_SKIP_FILES_PREFIXES = ('._', '.~', '.DS_Store', 'Thumbs.db', 'desktop.ini')
+_SKIP_FILES_EXACT = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
+
+
+def _should_skip_file(name: str) -> bool:
+    """Check if file should be skipped (system/hidden/temporary files)."""
+    if name in _SKIP_FILES_EXACT:
+        return True
+    for prefix in _SKIP_FILES_PREFIXES:
+        if name.startswith(prefix):
+            return True
+    return False
+
+
 def _scandir_recursive(root: Path) -> Iterable[Path]:
     try:
         with os.scandir(root) as entries:
@@ -88,6 +103,9 @@ def _scandir_recursive(root: Path) -> Iterable[Path]:
                 if entry.is_dir(follow_symlinks=False):
                     yield from _scandir_recursive(Path(entry.path))
                 elif entry.is_file(follow_symlinks=False):
+                    name = entry.name
+                    if _should_skip_file(name):
+                        continue
                     yield Path(entry.path)
     except PermissionError:
         return

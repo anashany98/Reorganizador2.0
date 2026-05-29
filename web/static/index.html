@@ -115,8 +115,20 @@
                 <input type="number" id="minSize" value="0" step="0.1" class="input-sm">
             </div>
             <div class="field">
-                <label for="extensions">Extensiones</label>
-                <input type="text" id="extensions" placeholder="pdf, jpg, xlsx" class="input-sm" spellcheck="false">
+                <label>Tipos de archivo</label>
+                <div class="file-type-grid">
+                    <label class="file-type-check"><input type="checkbox" id="typePdf" checked> <span>PDF</span></label>
+                    <label class="file-type-check"><input type="checkbox" id="typeExcel" checked> <span>Excel</span></label>
+                    <label class="file-type-check"><input type="checkbox" id="typeWord" checked> <span>Word</span></label>
+                    <label class="file-type-check"><input type="checkbox" id="typeImage" checked> <span>Imagenes</span></label>
+                    <label class="file-type-check"><input type="checkbox" id="typeMail" checked> <span>Correos</span></label>
+                    <label class="file-type-check"><input type="checkbox" id="typeCad" checked> <span>Planos</span></label>
+                    <label class="file-type-check"><input type="checkbox" id="typeZip" checked> <span>ZIP</span></label>
+                    <label class="file-type-check"><input type="checkbox" id="typeVideo" checked> <span>Video</span></label>
+                    <label class="file-type-check"><input type="checkbox" id="typeAudio" checked> <span>Audio</span></label>
+                    <label class="file-type-check"><input type="checkbox" id="typeOther"> <span>Otros</span></label>
+                </div>
+                <input type="text" id="extensions" placeholder="+ extras: dwg, msg" class="input-sm" spellcheck="false" style="margin-top:4px;">
             </div>
             <div class="field">
                 <label for="projectFilter">Proyectos (uno por linea o separado por comas)</label>
@@ -139,11 +151,11 @@
             </label>
                     <div class="field">
                 <label for="threads">Hilos de proceso</label>
-                <input type="number" id="threads" value="0" min="0" max="64" class="input-sm" placeholder="Auto">
+                <input type="number" id="threads" value="32" min="0" max="64" class="input-sm">
             </div>
             <div class="field">
                 <label for="processes">Procesos de hash</label>
-                <input type="number" id="processes" value="0" min="0" max="32" class="input-sm" placeholder="Auto">
+                <input type="number" id="processes" value="16" min="0" max="32" class="input-sm">
             </div>
                 <label class="toggle">
                 <input type="checkbox" id="dedup">
@@ -228,6 +240,14 @@
             <div class="stat stat-skip">
                 <span class="stat-num" id="statAmbiguo">0</span>
                 <span class="stat-label">Ambiguos</span>
+            </div>
+            <div class="stat stat-skip">
+                <span class="stat-num" id="statAmbiguoSerie">0</span>
+                <span class="stat-label">Amb Serie</span>
+            </div>
+            <div class="stat stat-skip">
+                <span class="stat-num" id="statSerieNoEncontrada">0</span>
+                <span class="stat-label">Sin Serie</span>
             </div>
             <div class="stat stat-err">
                 <span class="stat-num" id="statErrors">0</span>

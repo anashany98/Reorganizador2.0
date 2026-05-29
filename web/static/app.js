@@ -12,6 +12,8 @@ const statProcessed = document.getElementById('statProcessed');
 const statSinNumero = document.getElementById('statSinNumero');
 const statNoEncontrado = document.getElementById('statNoEncontrado');
 const statAmbiguo = document.getElementById('statAmbiguo');
+const statAmbiguoSerie = document.getElementById('statAmbiguoSerie');
+const statSerieNoEncontrada = document.getElementById('statSerieNoEncontrada');
 const statErrors = document.getElementById('statErrors');
 
 let pollingInterval = null;
@@ -338,6 +340,7 @@ async function doPreview() {
             years,
             dest,
             unmatched_dir: unmatchedDir,
+            extensions: buildExtensionsString(),
         });
         const resp = await fetch(`/api/preview?${params.toString()}`);
         if (!resp.ok) throw new Error((await resp.json()).detail || 'Error');
@@ -358,6 +361,7 @@ function renderPreview(data) {
     };
 
     const counters = data.match_counters || {};
+    const ambiguosTotal = (counters.AMBIGUO || 0) + (counters.AMBIGUO_SERIE || 0) + (counters.SERIE_NO_ENCONTRADA || 0);
     let html = `
     <div class="preview-grid">
         <div class="preview-stat">
@@ -381,7 +385,7 @@ function renderPreview(data) {
             <span class="preview-stat-label">OK</span>
         </div>
         <div class="preview-stat">
-            <span class="preview-stat-num">${(counters.AMBIGUO || 0).toLocaleString()}</span>
+            <span class="preview-stat-num">${ambiguosTotal.toLocaleString()}</span>
             <span class="preview-stat-label">Ambiguos</span>
         </div>
     </div>`;
@@ -395,10 +399,9 @@ function renderPreview(data) {
                         <tr>
                             <th>Archivo</th>
                             <th>Presupuesto</th>
+                            <th>Serie</th>
+                            <th>ClaveApp</th>
                             <th>Cliente</th>
-                            <th>Sede_Hotel_Direccion</th>
-                            <th>Referencia</th>
-                            <th>TipoDocumento</th>
                             <th>MatchStatus</th>
                             <th>Confianza</th>
                             <th>Ruta destino</th>
@@ -406,15 +409,17 @@ function renderPreview(data) {
                     </thead>
                     <tbody>`;
         data.items.forEach((item) => {
+            const statusClass = item.match_status?.startsWith('OK_') ? 'ok' : 
+                               item.match_status?.includes('AMBIGUO') ? 'warn' : 
+                               item.match_status?.includes('SERIE') ? 'warn' : '';
             html += `<tr>
                 <td title="${escapeHtml(item.src_path || '')}">${escapeHtml(item.file_name || '')}</td>
                 <td>${escapeHtml(item.presupuesto_detectado || '')}</td>
+                <td>${escapeHtml(item.serie_excel || 'GENERAL')}</td>
+                <td title="${escapeHtml(item.clave_app || '')}">${escapeHtml(item.clave_app || '')}</td>
                 <td>${escapeHtml(item.cliente || '')}</td>
-                <td>${escapeHtml(item.sede_hotel_direccion || '')}</td>
-                <td>${escapeHtml(item.referencia || '')}</td>
-                <td>${escapeHtml(item.tipo_documento || '')}</td>
-                <td>${escapeHtml(item.match_status || '')}</td>
-                <td>${escapeHtml(String(item.match_confidence ?? ''))}</td>
+                <td class="${statusClass}">${escapeHtml(item.match_status || '')}</td>
+                <td>${escapeHtml(String(item.match_confidence ? (item.match_confidence * 100).toFixed(0) + '%' : ''))}</td>
                 <td title="${escapeHtml(item.dst_path || '')}">${escapeHtml(item.dst_path || '')}</td>
             </tr>`;
         });
@@ -609,6 +614,23 @@ function updatePreflight() {
 // SCAN
 // ============================================================
 
+async function buildExtensionsString() {
+    const parts = [];
+    if (document.getElementById('typePdf').checked) parts.push('pdf');
+    if (document.getElementById('typeExcel').checked) parts.push('xls', 'xlsx', 'xlsm');
+    if (document.getElementById('typeWord').checked) parts.push('doc', 'docx');
+    if (document.getElementById('typeImage').checked) parts.push('jpg', 'jpeg', 'png', 'tif', 'tiff', 'bmp', 'gif', 'webp', 'heic');
+    if (document.getElementById('typeMail').checked) parts.push('msg', 'eml', 'pst', 'ost');
+    if (document.getElementById('typeCad').checked) parts.push('dwg', 'dxf', 'skp', 'rvt', 'ifc', 'pln', '3dm');
+    if (document.getElementById('typeZip').checked) parts.push('zip', 'rar', '7z');
+    if (document.getElementById('typeVideo').checked) parts.push('mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm');
+    if (document.getElementById('typeAudio').checked) parts.push('mp3', 'wav', 'flac', 'aac', 'ogg', 'wma', 'm4a');
+    // typeOther means we include files without recognized extensions
+    const extra = document.getElementById('extensions').value.trim();
+    if (extra) parts.push(...extra.split(',').map(e => e.trim().replace(/^\./, '')));
+    return parts.join(',');
+}
+
 async function startScan() {
     saveConfig();
     lastLoggedFile = "";
@@ -626,7 +648,7 @@ async function startScan() {
         move: document.getElementById('moveFiles').checked,
         dry_run: document.getElementById('dryRun').checked,
         min_size_mb: parseFloat(document.getElementById('minSize').value) || 0,
-        extensions: document.getElementById('extensions').value,
+        extensions: buildExtensionsString(),
         project_filter: document.getElementById('projectFilter').value,
         threads: parseInt(document.getElementById('threads').value) || 0,
         processes: parseInt(document.getElementById('processes').value) || 0,
@@ -667,7 +689,18 @@ async function startScan() {
         });
 
         if (!response.ok) {
-            throw new Error((await response.json()).detail || 'Error en el servidor');
+            let detail = 'Error en el servidor';
+            try {
+                const errBody = await response.json();
+                if (Array.isArray(errBody.detail)) {
+                    detail = errBody.detail.map(e => e.msg || JSON.stringify(e)).join(', ');
+                } else if (typeof errBody.detail === 'object' && errBody.detail !== null) {
+                    detail = JSON.stringify(errBody.detail);
+                } else {
+                    detail = String(errBody.detail || 'Error ' + response.status);
+                }
+            } catch (_) {}
+            throw new Error(detail);
         }
 
         const data = await response.json();
@@ -683,7 +716,9 @@ async function startScan() {
         }, 5000);
     } catch (err) {
         setRuntimeState('error', 'Error');
-        showToast(err.message, 'error');
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('Scan error:', err);
+        showToast(msg, 'error');
         setLoading(false);
     }
 }
@@ -725,7 +760,9 @@ async function checkStatus() {
         statProcessed.innerText = matchCounters.OK ?? data.stats.processed;
         statSinNumero.innerText = matchCounters.SIN_NUMERO_PRESUPUESTO || 0;
         statNoEncontrado.innerText = matchCounters.NO_ENCONTRADO_EN_EXCEL || 0;
-        statAmbiguo.innerText = matchCounters.AMBIGUO || 0;
+        statAmbiguo.innerText = (matchCounters.AMBIGUO || 0) + (matchCounters.AMBIGUO_SERIE || 0);
+        statAmbiguoSerie.innerText = matchCounters.AMBIGUO_SERIE || 0;
+        statSerieNoEncontrada.innerText = matchCounters.SERIE_NO_ENCONTRADA || 0;
         statErrors.innerText = data.stats.errors;
         if (progressBar) progressBar.style.width = `${percent}%`;
         if (progressText) progressText.textContent = `${percent}%`;

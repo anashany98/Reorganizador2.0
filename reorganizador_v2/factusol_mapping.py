@@ -1,4 +1,4 @@
-"""FactuSOL mapping support for budget-based document organization."""
+"""FactuSOL mapping support for budget-based document organization with Serie support."""
 
 from __future__ import annotations
 
@@ -10,40 +10,46 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-OK_STATUSES = {"OK_EXACTO", "OK_NORMALIZADO", "OK_COMPACTO", "OK_RECOMPUESTO"}
+# OK statuses
+OK_STATUSES = {"OK_CLAVEAPP", "OK_ANIO_SERIE_PRESUPUESTO", "OK_NUMERO_UNICO", 
+               "OK_EXACTO", "OK_NORMALIZADO", "OK_COMPACTO", "OK_RECOMPUESTO"}
 STATUS_SIN_NUMERO = "SIN_NUMERO_PRESUPUESTO"
 STATUS_NO_ENCONTRADO = "NO_ENCONTRADO_EN_EXCEL"
 STATUS_AMBIGUO = "AMBIGUO"
+STATUS_AMBIGUO_SERIE = "AMBIGUO_SERIE"
+STATUS_SERIE_NO_ENCONTRADA = "SERIE_NO_ENCONTRADA"
 
+# Column definitions
 REQUIRED_COLUMNS = [
     "Anio",
     "Presupuesto",
     "Cliente",
     "Sede_Hotel_Direccion",
-    "Referencia",
     "OrigenAsignacion",
-    "ClaveInterna",
 ]
 
-OPTIONAL_COLUMNS = ["DuplicadoAnioPresupuesto"]
+OPTIONAL_COLUMNS = ["Serie", "ClaveApp", "Referencia", "ClaveInterna"]
 
+# Regex patterns
 _SEPARATOR_RE = re.compile(r"[-./\\_()\[\]#]+")
 _SPACES_RE = re.compile(r"\s+")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _INVALID_PATH_CHARS_RE = re.compile(r'[<>:"/\\|?*]+')
 _NUMBER_RE = re.compile(r"\d+")
+_SERIE_RE = re.compile(r"\b([A-Z]{1,3})\b")
 
 
 @dataclass(slots=True)
 class FactusolBudgetRecord:
     anio: str
+    serie: str  # Nueva: Serie del presupuesto
     presupuesto: str
     cliente: str
     sede_hotel_direccion: str
-    referencia: str
-    origen_asignacion: str
-    clave_interna: str
-    duplicado_anio_presupuesto: str = ""
+    referencia: str = ""
+    origen_asignacion: str = ""
+    clave_interna: str = ""
+    clave_app: str = ""  # Nueva: ClaveApp = Anio-Serie-Presupuesto
 
 
 @dataclass(slots=True)
@@ -55,6 +61,7 @@ class BudgetCandidate:
     confidence: float
     source_level: str
     reason: str
+    detected_serie: str = ""  # Nueva: Serie detectada en la ruta
 
 
 @dataclass(slots=True)
@@ -64,6 +71,9 @@ class MatchResult:
     candidate: BudgetCandidate | None = None
     year: str | None = None
     presupuesto_detectado: str | None = None
+    serie_detectada: str = ""  # Nueva
+    serie_excel: str = ""  # Nueva
+    clave_app: str = ""  # Nueva
     cliente: str = ""
     sede_hotel_direccion: str = ""
     referencia: str = ""
@@ -84,50 +94,80 @@ class MatchResult:
 @dataclass(slots=True)
 class FactusolMappingIndex:
     records: list[FactusolBudgetRecord]
-    mapping_by_year_budget: dict[tuple[str, str], list[FactusolBudgetRecord]] = field(default_factory=dict)
-    records_by_budget: dict[str, list[FactusolBudgetRecord]] = field(default_factory=dict)
+    # Key: (anio, serie, presupuesto) -> list of records (should be 1:1 usually)
+    mapping_by_clave_app: dict[str, list[FactusolBudgetRecord]] = field(default_factory=dict)
+    # Key: (anio, presupuesto) -> list of records (for duplicate detection)
+    mapping_by_anio_presupuesto: dict[tuple[str, str], list[FactusolBudgetRecord]] = field(default_factory=dict)
+    # Key: presupuesto -> list of records (for unique budget detection)
+    records_by_presupuesto: dict[str, list[FactusolBudgetRecord]] = field(default_factory=dict)
     years: set[str] = field(default_factory=set)
     budgets: set[str] = field(default_factory=set)
-    duplicate_keys: set[tuple[str, str]] = field(default_factory=set)
+    series: set[str] = field(default_factory=set)
+    # (anio, presupuesto) tuples that have multiple series
+    anio_presupuesto_with_multiple_series: set[tuple[str, str]] = field(default_factory=set)
 
     @classmethod
     def from_records(cls, records: Iterable[FactusolBudgetRecord]) -> "FactusolMappingIndex":
         materialized = list(records)
-        by_key: dict[tuple[str, str], list[FactusolBudgetRecord]] = defaultdict(list)
-        by_budget: dict[str, list[FactusolBudgetRecord]] = defaultdict(list)
+        by_clave_app: dict[str, list[FactusolBudgetRecord]] = defaultdict(list)
+        by_anio_presupuesto: dict[tuple[str, str], list[FactusolBudgetRecord]] = defaultdict(list)
+        by_presupuesto: dict[str, list[FactusolBudgetRecord]] = defaultdict(list)
         years: set[str] = set()
         budgets: set[str] = set()
+        series: set[str] = set()
+        anio_presupuesto_series: dict[tuple[str, str], set[str]] = defaultdict(set)
 
         for record in materialized:
-            key = (record.anio, record.presupuesto)
-            by_key[key].append(record)
-            by_budget[record.presupuesto].append(record)
+            clave_app = record.clave_app
+            key_anio_pres = (record.anio, record.presupuesto)
+            
+            by_clave_app[clave_app].append(record)
+            by_anio_presupuesto[key_anio_pres].append(record)
+            by_presupuesto[record.presupuesto].append(record)
             years.add(record.anio)
             budgets.add(record.presupuesto)
+            series.add(record.serie)
+            anio_presupuesto_series[key_anio_pres].add(record.serie)
 
-        duplicates = {key for key, values in by_key.items() if len(values) > 1}
+        # Find (anio, presupuesto) pairs with multiple series
+        multi_series = {
+            k for k, v in anio_presupuesto_series.items() if len(v) > 1
+        }
+        
         return cls(
             records=materialized,
-            mapping_by_year_budget=dict(by_key),
-            records_by_budget=dict(by_budget),
+            mapping_by_clave_app=dict(by_clave_app),
+            mapping_by_anio_presupuesto=dict(by_anio_presupuesto),
+            records_by_presupuesto=dict(by_presupuesto),
             years=years,
             budgets=budgets,
-            duplicate_keys=duplicates,
+            series=series,
+            anio_presupuesto_with_multiple_series=multi_series,
         )
 
-    def is_duplicate(self, record: FactusolBudgetRecord) -> bool:
-        return (record.anio, record.presupuesto) in self.duplicate_keys
+    def is_unique_budget_in_year(self, anio: str, presupuesto: str) -> bool:
+        """Check if presupuesto is unique within the year (no multiple series)."""
+        key = (anio, presupuesto)
+        return key not in self.anio_presupuesto_with_multiple_series
+
+    def get_records_by_clave_app(self, clave_app: str) -> list[FactusolBudgetRecord]:
+        return self.mapping_by_clave_app.get(clave_app, [])
+
+    def get_records_by_anio_serie_presupuesto(self, anio: str, serie: str, presupuesto: str) -> list[FactusolBudgetRecord]:
+        clave_app = f"{anio}-{serie}-{presupuesto}"
+        return self.get_records_by_clave_app(clave_app)
 
 
 class FactusolMappingLoader:
     """Loads the simplified FactuSOL Excel mapping."""
 
     sheet_name = "Mapping_FactuSOL"
+    DEFAULT_SERIE = "GENERAL"
 
     def load_mapping(self, excel_path: Path) -> FactusolMappingIndex:
         try:
             from openpyxl import load_workbook
-        except ImportError as exc:  # pragma: no cover - dependency is declared.
+        except ImportError as exc:
             raise RuntimeError("openpyxl no esta instalado. pip install openpyxl") from exc
 
         if not excel_path.exists():
@@ -169,18 +209,29 @@ class FactusolMappingLoader:
                 if not any(data.values()):
                     continue
 
+                anio = data["Anio"].strip()
+                serie = data["Serie"].strip() or self.DEFAULT_SERIE
+                presupuesto = data["Presupuesto"].strip()
+                
+                # Build or use ClaveApp
+                clave_app = data.get("ClaveApp", "").strip()
+                if not clave_app:
+                    clave_app = f"{anio}-{serie}-{presupuesto}"
+                
                 cliente = data["Cliente"].strip()
                 sede = data["Sede_Hotel_Direccion"].strip() or cliente
+                
                 records.append(
                     FactusolBudgetRecord(
-                        anio=data["Anio"].strip(),
-                        presupuesto=data["Presupuesto"].strip(),
+                        anio=anio,
+                        serie=serie,
+                        presupuesto=presupuesto,
                         cliente=cliente,
                         sede_hotel_direccion=sede,
-                        referencia=data["Referencia"].strip(),
-                        origen_asignacion=data["OrigenAsignacion"].strip(),
-                        clave_interna=data["ClaveInterna"].strip(),
-                        duplicado_anio_presupuesto=data.get("DuplicadoAnioPresupuesto", "").strip(),
+                        referencia=data.get("Referencia", "").strip(),
+                        origen_asignacion=data.get("OrigenAsignacion", "").strip(),
+                        clave_interna=data.get("ClaveInterna", "").strip(),
+                        clave_app=clave_app,
                     )
                 )
         finally:
@@ -229,37 +280,85 @@ def detect_year_from_path(path: Path, allowed_years: set[str]) -> str | None:
     return None
 
 
-def detect_budget_candidates(path: Path, mapping_index: FactusolMappingIndex) -> list[BudgetCandidate]:
+def detect_serie_from_path(path: Path, available_series: set[str]) -> str | None:
+    """Detect Serie from path. Returns None if not found or ambiguous."""
+    if not available_series:
+        return None
+    
+    path_text = normalize_text(str(path))
+    
+    # Look for serie patterns like "A-", "_B", " SERIE A ", etc.
+    for serie in available_series:
+        if serie == "GENERAL":
+            continue
+        
+        # Patterns that indicate a serie in the path
+        serie_patterns = [
+            f"-{serie}-",          # e.g., "A-250076"
+            f"_{serie}_",          # e.g., "A_250076"
+            f" {serie} ",          # e.g., "SERIE A 250076"
+            f"{serie}-",           # e.g., "A-250076" at start
+            f"-{serie}$",          # e.g., "250076-A" at end
+            f"^{serie}-",          # e.g., "A-250076" at start
+        ]
+        
+        for pattern in serie_patterns:
+            if pattern.lower() in path_text.lower():
+                return serie
+    
+    return None
+
+
+def _extract_numbers_from_text(text: str) -> list[str]:
+    """Extract potential budget numbers (5+ digits) from text."""
+    return [n for n in _NUMBER_RE.findall(text) if len(n) >= 5]
+
+
+def detect_budget_with_serie(path: Path, mapping_index: FactusolMappingIndex) -> list[BudgetCandidate]:
+    """Detect budget candidates including serie detection - optimized version."""
     candidates: list[BudgetCandidate] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[str] = set()
 
     for raw_text, source_level, source_rank in _path_source_texts(path):
         if not raw_text:
             continue
         normalized = normalize_text(raw_text)
         compact = compact_text(raw_text)
-        for budget in mapping_index.budgets:
-            reason = _match_reason_for_budget(raw_text, budget)
-            if not reason:
-                continue
-            key = (budget, source_level, normalized)
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append(
-                BudgetCandidate(
-                    raw_text=raw_text,
-                    normalized_text=normalized,
-                    compact_text=compact,
-                    detected_budget=budget,
-                    confidence=_confidence_for(reason, source_rank),
-                    source_level=source_level,
-                    reason=reason,
-                )
-            )
+
+        # Extract numbers from this text - these are potential budget numbers
+        numbers = _extract_numbers_from_text(normalized)
+        if not numbers:
+            continue
+
+        # For each number found, check if it's a known budget
+        for number in numbers:
+            if number in mapping_index.budgets and number not in seen:
+                seen.add(number)
+                reason = _match_reason_for_budget(raw_text, number)
+                if reason:
+                    # Try to detect serie from the same text
+                    detected_serie = detect_serie_from_path(Path(raw_text), mapping_index.series)
+
+                    candidates.append(
+                        BudgetCandidate(
+                            raw_text=raw_text,
+                            normalized_text=normalized,
+                            compact_text=compact,
+                            detected_budget=number,
+                            detected_serie=detected_serie or "",
+                            confidence=_confidence_for(reason, source_rank),
+                            source_level=source_level,
+                            reason=reason,
+                        )
+                    )
 
     candidates.sort(key=lambda item: item.confidence, reverse=True)
     return candidates
+
+
+# Keep backward compatibility
+def detect_budget_candidates(path: Path, mapping_index: FactusolMappingIndex) -> list[BudgetCandidate]:
+    return detect_budget_with_serie(path, mapping_index)
 
 
 def resolve_budget_match(
@@ -287,74 +386,88 @@ def resolve_budget_match(
             reason=STATUS_SIN_NUMERO,
         )
 
-    best_by_budget: dict[str, BudgetCandidate] = {}
-    for candidate in candidates:
-        existing = best_by_budget.get(candidate.detected_budget)
-        if existing is None or candidate.confidence > existing.confidence:
-            best_by_budget[candidate.detected_budget] = candidate
-
-    ranked_candidates = sorted(best_by_budget.values(), key=lambda item: item.confidence, reverse=True)
-    if len(ranked_candidates) > 1:
-        best = ranked_candidates[0]
-        second = ranked_candidates[1]
-        if best.confidence - second.confidence < 0.15:
-            return MatchResult(
-                status=STATUS_AMBIGUO,
-                year=detected_year,
-                presupuesto_detectado=", ".join(candidate.detected_budget for candidate in ranked_candidates),
-                candidate=best,
-                confidence=best.confidence,
-                source_level=best.source_level,
-                reason="Varios presupuestos candidatos con confianza similar.",
-                texto_detectado=best.raw_text,
-            )
-
-    candidate = ranked_candidates[0]
-    records = _records_for_candidate(candidate.detected_budget, mapping_index, detected_year, effective_years)
-    if not records:
+    # Get the best candidate
+    best = candidates[0]
+    presupuesto = best.detected_budget
+    
+    # Step 1: Check if we can detect a serie from path
+    detected_serie = best.detected_serie
+    
+    # Step 2: Get all records matching (year, presupuesto)
+    anio_records = mapping_index.mapping_by_anio_presupuesto.get((detected_year or "", presupuesto), [])
+    if not anio_records and detected_year:
+        # Try with any year
+        for year in mapping_index.years:
+            anio_records = mapping_index.mapping_by_anio_presupuesto.get((year, presupuesto), [])
+            if anio_records:
+                detected_year = year
+                break
+    
+    if not anio_records:
         return MatchResult(
             status=STATUS_NO_ENCONTRADO,
-            candidate=candidate,
+            candidate=best,
             year=detected_year,
-            presupuesto_detectado=candidate.detected_budget,
-            confidence=candidate.confidence,
-            source_level=candidate.source_level,
+            presupuesto_detectado=presupuesto,
+            confidence=best.confidence,
+            source_level=best.source_level,
             reason=STATUS_NO_ENCONTRADO,
-            texto_detectado=candidate.raw_text,
+            texto_detectado=best.raw_text,
         )
-
-    if len(records) == 1:
+    
+    # Step 3: Check uniqueness
+    has_multiple_series = (detected_year or "", presupuesto) in mapping_index.anio_presupuesto_with_multiple_series
+    
+    if not has_multiple_series:
+        # Only one serie for this presupuesto+year - use it directly
+        record = anio_records[0]
         return _ok_result(
-            status=candidate.reason,
-            record=records[0],
-            candidate=candidate,
+            status="OK_NUMERO_UNICO",
+            record=record,
+            candidate=best,
             mapping_index=mapping_index,
-            confidence=candidate.confidence,
+            confidence=best.confidence,
+            reason="Presupuesto unico para el anio, serie automatica.",
         )
-
-    resolved = _resolve_duplicate_record(path, records)
-    if resolved is None:
-        return MatchResult(
-            status=STATUS_AMBIGUO,
-            candidate=candidate,
-            year=detected_year,
-            presupuesto_detectado=candidate.detected_budget,
-            confidence=candidate.confidence,
-            source_level=candidate.source_level,
-            reason="Duplicado Anio+Presupuesto sin contexto suficiente.",
-            texto_detectado=candidate.raw_text,
-            duplicado_anio_presupuesto="SI",
-        )
-
-    record, score, margin = resolved
-    confidence = min(1.0, candidate.confidence + min(score, 5.0) / 20.0)
-    return _ok_result(
-        status=candidate.reason,
-        record=record,
-        candidate=candidate,
-        mapping_index=mapping_index,
-        confidence=confidence,
-        reason=f"Duplicado resuelto por contexto; margen {margin:.2f}.",
+    
+    # Step 4: Multiple series exist - need to detect serie from path
+    if detected_serie:
+        # Try exact match with detected serie
+        matching_records = [r for r in anio_records if r.serie == detected_serie]
+        if matching_records:
+            record = matching_records[0]
+            return _ok_result(
+                status="OK_ANIO_SERIE_PRESUPUESTO",
+                record=record,
+                candidate=best,
+                mapping_index=mapping_index,
+                confidence=best.confidence,
+                reason=f"Serie {detected_serie} detectada en ruta.",
+            )
+        else:
+            # Serie detected but doesn't match any record
+            return MatchResult(
+                status=STATUS_SERIE_NO_ENCONTRADA,
+                candidate=best,
+                year=detected_year,
+                presupuesto_detectado=presupuesto,
+                serie_detectada=detected_serie,
+                confidence=best.confidence,
+                source_level=best.source_level,
+                reason=f"Serie {detected_serie} detectada pero no existe en Excel para este presupuesto.",
+                texto_detectado=best.raw_text,
+            )
+    
+    # Step 5: No serie detected and multiple exist - AMBIGUO
+    return MatchResult(
+        status=STATUS_AMBIGUO_SERIE,
+        candidate=best,
+        year=detected_year,
+        presupuesto_detectado=presupuesto,
+        confidence=best.confidence,
+        source_level=best.source_level,
+        reason=f"Multiple series ({len(anio_records)}) para presupuesto {presupuesto} en anio {detected_year}. Serie no detectable en ruta.",
+        texto_detectado=best.raw_text,
     )
 
 
@@ -364,7 +477,7 @@ def categorize_document_type(path: Path) -> str:
         return "PDF"
     if ext in {".xls", ".xlsx", ".xlsm", ".csv"}:
         return "EXCEL"
-    if ext in {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic"}:
+    if ext in {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".gif"}:
         return "IMAGENES"
     if ext in {".msg", ".eml", ".pst", ".ost"}:
         return "CORREOS"
@@ -405,6 +518,10 @@ def build_factusol_client_budget_destination_path(
     if match_result.status == STATUS_NO_ENCONTRADO:
         year = sanitize_path_part(match_result.year or "DESCONOCIDO")
         return _append_relative(review_root / "_NO_ENCONTRADO_EN_EXCEL" / year, relative_parent) / src.name
+    if match_result.status == STATUS_AMBIGUO_SERIE:
+        return _append_relative(review_root / "_AMBIGUO_SERIE", relative_parent) / src.name
+    if match_result.status == STATUS_SERIE_NO_ENCONTRADA:
+        return _append_relative(review_root / "_SERIE_NO_ENCONTRADA", relative_parent) / src.name
     return _append_relative(review_root / "_AMBIGUO", relative_parent) / src.name
 
 
@@ -481,24 +598,23 @@ def _confidence_for(reason: str, source_rank: int) -> float:
         "OK_NORMALIZADO": 0.94,
         "OK_COMPACTO": 0.90,
         "OK_RECOMPUESTO": 0.88,
-    }[reason]
+    }.get(reason, 0.85)
     return max(0.10, base - (source_rank * 0.05))
 
 
 def _unknown_budget_numbers(path: Path, mapping_index: FactusolMappingIndex) -> list[str]:
     found: list[str] = []
     seen: set[str] = set()
-    allowed_years = mapping_index.years
     for raw_text, _, _ in _path_source_texts(path):
         normalized = normalize_text(raw_text)
         numbers = _NUMBER_RE.findall(normalized)
         for number in numbers:
-            if len(number) >= 5 and number not in mapping_index.budgets and number not in allowed_years:
+            if len(number) >= 5 and number not in mapping_index.budgets and number not in mapping_index.years:
                 if number not in seen:
                     seen.add(number)
                     found.append(number)
         for recomposed in _recomposed_numbers(numbers):
-            if recomposed not in mapping_index.budgets and recomposed not in allowed_years:
+            if recomposed not in mapping_index.budgets and recomposed not in mapping_index.years:
                 if recomposed not in seen:
                     seen.add(recomposed)
                     found.append(recomposed)
@@ -516,76 +632,6 @@ def _recomposed_numbers(numbers: Sequence[str]) -> Iterable[str]:
                 break
 
 
-def _records_for_candidate(
-    budget: str,
-    mapping_index: FactusolMappingIndex,
-    detected_year: str | None,
-    allowed_years: set[str],
-) -> list[FactusolBudgetRecord]:
-    records = list(mapping_index.records_by_budget.get(budget, []))
-    if allowed_years:
-        records = [record for record in records if record.anio in allowed_years]
-    if detected_year:
-        records = [record for record in records if record.anio == detected_year]
-    return records
-
-
-def _resolve_duplicate_record(
-    path: Path,
-    records: Sequence[FactusolBudgetRecord],
-) -> tuple[FactusolBudgetRecord, float, float] | None:
-    path_norm = normalize_text(str(path))
-    path_compact = path_norm.replace(" ", "")
-    scored = sorted(
-        ((record, _score_record(record, path_norm, path_compact)) for record in records),
-        key=lambda item: item[1],
-        reverse=True,
-    )
-    if not scored or scored[0][1] < 2.0:
-        return None
-    if len(scored) > 1:
-        margin = scored[0][1] - scored[1][1]
-        if margin < 1.5:
-            return None
-    else:
-        margin = scored[0][1]
-    return scored[0][0], scored[0][1], margin
-
-
-def _score_record(record: FactusolBudgetRecord, path_norm: str, path_compact: str) -> float:
-    weighted_fields = [
-        (record.sede_hotel_direccion, 4.0),
-        (record.referencia, 4.0),
-        (record.cliente, 2.0),
-    ]
-    score = 0.0
-    path_tokens = set(_meaningful_tokens(path_norm))
-    for value, weight in weighted_fields:
-        normalized = normalize_text(value)
-        compact = normalized.replace(" ", "")
-        if not normalized:
-            continue
-        if normalized in path_norm:
-            score += weight
-            continue
-        if compact and compact in path_compact:
-            score += weight * 0.9
-            continue
-        tokens = set(_meaningful_tokens(normalized))
-        if tokens:
-            overlap = len(tokens & path_tokens) / len(tokens)
-            score += weight * overlap * 0.6
-    return score
-
-
-def _meaningful_tokens(value: str) -> list[str]:
-    return [
-        token
-        for token in normalize_text(value).split()
-        if len(token) > 2 and not token.isdigit()
-    ]
-
-
 def _ok_result(
     status: str,
     record: FactusolBudgetRecord,
@@ -600,6 +646,9 @@ def _ok_result(
         candidate=candidate,
         year=record.anio,
         presupuesto_detectado=record.presupuesto,
+        serie_detectada=candidate.detected_serie,
+        serie_excel=record.serie,
+        clave_app=record.clave_app,
         cliente=record.cliente,
         sede_hotel_direccion=record.sede_hotel_direccion or record.cliente,
         referencia=record.referencia,
@@ -609,7 +658,6 @@ def _ok_result(
         source_level=candidate.source_level,
         reason=reason or candidate.reason,
         texto_detectado=candidate.raw_text,
-        duplicado_anio_presupuesto="SI" if mapping_index.is_duplicate(record) else "NO",
     )
 
 
