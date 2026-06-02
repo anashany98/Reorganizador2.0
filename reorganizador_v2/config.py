@@ -1,4 +1,4 @@
-﻿"""Application-wide configuration and logging helpers."""
+"""Application-wide configuration and logging helpers."""
 
 from __future__ import annotations
 

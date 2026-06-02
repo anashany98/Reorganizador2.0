@@ -340,7 +340,7 @@ async function doPreview() {
             years,
             dest,
             unmatched_dir: unmatchedDir,
-            extensions: buildExtensionsString(),
+        extensions: await buildExtensionsString(),
         });
         const resp = await fetch(`/api/preview?${params.toString()}`);
         if (!resp.ok) throw new Error((await resp.json()).detail || 'Error');
@@ -616,17 +616,18 @@ function updatePreflight() {
 
 async function buildExtensionsString() {
     const parts = [];
-    if (document.getElementById('typePdf').checked) parts.push('pdf');
-    if (document.getElementById('typeExcel').checked) parts.push('xls', 'xlsx', 'xlsm');
-    if (document.getElementById('typeWord').checked) parts.push('doc', 'docx');
-    if (document.getElementById('typeImage').checked) parts.push('jpg', 'jpeg', 'png', 'tif', 'tiff', 'bmp', 'gif', 'webp', 'heic');
-    if (document.getElementById('typeMail').checked) parts.push('msg', 'eml', 'pst', 'ost');
-    if (document.getElementById('typeCad').checked) parts.push('dwg', 'dxf', 'skp', 'rvt', 'ifc', 'pln', '3dm');
-    if (document.getElementById('typeZip').checked) parts.push('zip', 'rar', '7z');
-    if (document.getElementById('typeVideo').checked) parts.push('mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm');
-    if (document.getElementById('typeAudio').checked) parts.push('mp3', 'wav', 'flac', 'aac', 'ogg', 'wma', 'm4a');
+    if (document.getElementById('typePdf')?.checked) parts.push('pdf');
+    if (document.getElementById('typeExcel')?.checked) parts.push('xls', 'xlsx', 'xlsm');
+    if (document.getElementById('typeWord')?.checked) parts.push('doc', 'docx');
+    if (document.getElementById('typeImage')?.checked) parts.push('jpg', 'jpeg', 'png', 'tif', 'tiff', 'bmp', 'gif', 'webp', 'heic');
+    if (document.getElementById('typeMail')?.checked) parts.push('msg', 'eml', 'pst', 'ost');
+    if (document.getElementById('typeCad')?.checked) parts.push('dwg', 'dxf', 'skp', 'rvt', 'ifc', 'pln', '3dm');
+    if (document.getElementById('typeZip')?.checked) parts.push('zip', 'rar', '7z');
+    if (document.getElementById('typeVideo')?.checked) parts.push('mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm');
+    if (document.getElementById('typeAudio')?.checked) parts.push('mp3', 'wav', 'flac', 'aac', 'ogg', 'wma', 'm4a');
     // typeOther means we include files without recognized extensions
-    const extra = document.getElementById('extensions').value.trim();
+    const extensionsEl = document.getElementById('extensions');
+    const extra = extensionsEl ? extensionsEl.value.trim() : '';
     if (extra) parts.push(...extra.split(',').map(e => e.trim().replace(/^\./, '')));
     return parts.join(',');
 }
@@ -648,7 +649,7 @@ async function startScan() {
         move: document.getElementById('moveFiles').checked,
         dry_run: document.getElementById('dryRun').checked,
         min_size_mb: parseFloat(document.getElementById('minSize').value) || 0,
-        extensions: buildExtensionsString(),
+        extensions: await buildExtensionsString(),
         project_filter: document.getElementById('projectFilter').value,
         threads: parseInt(document.getElementById('threads').value) || 0,
         processes: parseInt(document.getElementById('processes').value) || 0,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import mimetypes
 import os
 import shutil
@@ -74,7 +75,7 @@ def _preserve_creation_time(src: Path, dest: Path) -> None:
             ctypes.windll.kernel32.SetFileTime(handle, ctypes.byref(ct), None, None)
             kernel32.CloseHandle(handle)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("Could not preserve file creation time", exc_info=True)
 
 
 def safe_makedirs(path: Path) -> None:

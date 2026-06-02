@@ -383,7 +383,7 @@ def run_scan(args: argparse.Namespace) -> None:
                     console.print("[red]Ya hay un escaneo en curso (PID {})[/red]".format(pid))
                     return
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("Could not read lock file PID", exc_info=True)
             lock_path.unlink(missing_ok=True)
         lock_path.write_text(str(os.getpid()))
 
@@ -471,7 +471,7 @@ def run_scan(args: argparse.Namespace) -> None:
         else:
             winsound.MessageBeep(0x00)  # OK
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("Notification sound not available", exc_info=True)
 
     console.print(stats.as_table())
 
@@ -541,7 +541,7 @@ def run_preview(args: argparse.Namespace) -> None:
             already = sum(1 for f in files if str(f) in cached)
             conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Incremental cache unavailable, processing all files", exc_info=True)
 
     # Filtro de proyectos
     project_filter = file_utils.parse_project_filter(args.projects)
