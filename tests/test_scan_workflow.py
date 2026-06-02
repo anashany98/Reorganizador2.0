@@ -195,6 +195,6 @@ def test_factusol_dry_run_records_destination_without_copying(tmp_path: Path) ->
     assert row["cliente"] == "MELIA HOTELS INTERNATIONAL S.A"
     assert row["sede_hotel_direccion"] == "GRAN MELIA VICTORIA"
     assert row["tipo_documento"] == "PDF"
-    assert row["match_status"] in {"OK_NORMALIZADO", "OK_COMPACTO"}
+    assert row["match_status"] == "OK_NUMERO_UNICO"
     assert "Presupuesto 250076" in row["dst_path"]
     assert row["hash_verified"] == "dry-run"

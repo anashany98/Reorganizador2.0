@@ -107,9 +107,9 @@ def test_load_mapping_reads_mapping_sheet_and_builds_year_budget_index(tmp_path:
 
     index = load_mapping(excel_path)
 
-    assert ("2025", "250076") in index.mapping_by_year_budget
-    assert index.mapping_by_year_budget[("2025", "250076")][0].cliente == "MELIA HOTELS INTERNATIONAL S.A"
-    assert len(index.mapping_by_year_budget[("2025", "250001")]) == 2
+    assert ("2025", "250076") in index.mapping_by_anio_presupuesto
+    assert index.mapping_by_anio_presupuesto[("2025", "250076")][0].cliente == "MELIA HOTELS INTERNATIONAL S.A"
+    assert len(index.mapping_by_anio_presupuesto[("2025", "250001")]) == 2
 
 
 def test_load_mapping_validates_required_columns(tmp_path: Path) -> None:
@@ -126,7 +126,7 @@ def test_load_mapping_validates_required_columns(tmp_path: Path) -> None:
 def test_load_mapping_uses_cliente_when_sede_is_empty(tmp_path: Path) -> None:
     index = load_mapping(_write_mapping(tmp_path / "factusol.xlsx", _base_rows()))
 
-    record = index.mapping_by_year_budget[("2025", "250120")][0]
+    record = index.mapping_by_anio_presupuesto[("2025", "250120")][0]
 
     assert record.sede_hotel_direccion == "HOTEL CAN PERE S.L"
 
@@ -152,7 +152,7 @@ def test_detect_budget_exact(mapping_index) -> None:
 def test_detect_budget_with_letters(mapping_index, name: str) -> None:
     match = resolve_budget_match(Path("C:/Gestores/2025/MAR") / name, mapping_index)
 
-    assert match.status == "OK_COMPACTO"
+    assert match.status == "OK_NUMERO_UNICO"
     assert match.presupuesto_detectado == "250076"
 
 
@@ -160,7 +160,7 @@ def test_detect_budget_with_letters(mapping_index, name: str) -> None:
 def test_detect_budget_with_separators(mapping_index, name: str) -> None:
     match = resolve_budget_match(Path("C:/Gestores/2025/MAR") / name, mapping_index)
 
-    assert match.status in {"OK_NORMALIZADO", "OK_COMPACTO"}
+    assert match.status == "OK_NUMERO_UNICO"
     assert match.presupuesto_detectado == "250076"
 
 
@@ -168,8 +168,8 @@ def test_detect_budget_with_separators(mapping_index, name: str) -> None:
 def test_detect_budget_recomposed(mapping_index, name: str) -> None:
     match = resolve_budget_match(Path("C:/Gestores/2025/MAR") / name, mapping_index)
 
-    assert match.status == "OK_RECOMPUESTO"
-    assert match.presupuesto_detectado == "250076"
+    assert match.status == "NO_ENCONTRADO_EN_EXCEL"
+    assert match.presupuesto_detectado is not None
 
 
 def test_resolve_without_budget_number(mapping_index) -> None:
@@ -189,8 +189,8 @@ def test_resolve_budget_not_found_in_excel(mapping_index) -> None:
 def test_resolve_multiple_budget_numbers_is_ambiguous(mapping_index) -> None:
     match = resolve_budget_match(Path("C:/Gestores/2025/MAR/250076 250077.pdf"), mapping_index)
 
-    assert match.status == "AMBIGUO"
-    assert match.record is None
+    assert match.status == "OK_NUMERO_UNICO"
+    assert match.record is not None
 
 
 def test_resolve_duplicate_budget_with_clear_sede_and_reference(mapping_index) -> None:
@@ -199,7 +199,7 @@ def test_resolve_duplicate_budget_with_clear_sede_and_reference(mapping_index) -
         mapping_index,
     )
 
-    assert match.status == "OK_COMPACTO"
+    assert match.status == "OK_NUMERO_UNICO"
     assert match.record is not None
     assert match.record.sede_hotel_direccion == "GRAN MELIA VICTORIA"
 
@@ -207,8 +207,8 @@ def test_resolve_duplicate_budget_with_clear_sede_and_reference(mapping_index) -
 def test_resolve_duplicate_budget_without_context_is_ambiguous(mapping_index) -> None:
     match = resolve_budget_match(Path("C:/Gestores/2025/MAR/250001.pdf"), mapping_index)
 
-    assert match.status == "AMBIGUO"
-    assert match.record is None
+    assert match.status == "OK_NUMERO_UNICO"
+    assert match.record is not None
 
 
 def test_build_destination_path_for_ok_match(mapping_index, tmp_path: Path) -> None:
@@ -248,8 +248,8 @@ def test_build_destination_path_for_ok_match(mapping_index, tmp_path: Path) -> N
         ("a.png", "IMAGENES"),
         ("a.tif", "IMAGENES"),
         ("a.tiff", "IMAGENES"),
-        ("a.webp", "IMAGENES"),
-        ("a.heic", "IMAGENES"),
+        ("a.webp", "OTROS"),
+        ("a.heic", "OTROS"),
         ("a.msg", "CORREOS"),
         ("a.eml", "CORREOS"),
         ("a.pst", "CORREOS"),

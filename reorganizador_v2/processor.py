@@ -317,6 +317,7 @@ class FileProcessor:
         )
 
         if should_skip and self.options.conflict != "overwrite":
+            assert cache_entry is not None  # guaranteed by should_skip
             dest_path = cached_dest_path
             dest_path_str = cache_entry.dest_path
             record = ProcessingRecord(
@@ -338,6 +339,7 @@ class FileProcessor:
             and cache_entry.matches(metadata.size_bytes, metadata.mtime_ts, self.options.hash_algorithm)
         )
         if use_cached_hash:
+            assert cache_entry is not None  # guaranteed by use_cached_hash
             hash_result = file_utils.HashResult(
                 algorithm=cache_entry.hash_algo or self.options.hash_algorithm,
                 value=cache_entry.hash_value, duration_seconds=0.0,
@@ -346,8 +348,8 @@ class FileProcessor:
             hash_result = self.hash_calculator.compute(path)
 
         hash_value_dst = cache_entry.dest_hash if cache_entry else None
-        hash_verified = cache_entry.hash_verified if cache_entry else "pending"
-        verified_flag = cache_entry.verified if cache_entry else False
+        hash_verified = (cache_entry.hash_verified or "pending") if cache_entry else "pending"
+        verified_flag = bool(cache_entry.verified) if cache_entry else False
 
         error: Optional[str] = None
         action_status = "ok"

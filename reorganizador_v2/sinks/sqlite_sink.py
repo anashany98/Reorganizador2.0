@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Iterable, List, Mapping, Sequence
+from typing import Iterable, List, Mapping, Optional, Sequence
 
 from .. import config
 
@@ -179,7 +179,12 @@ class SQLiteSink:
     def save_checkpoint(self, src_path: str) -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT OR REPLACE INTO checkpoints (src_path) VALUES (?)",
+                """
+                INSERT INTO checkpoints (src_path) VALUES (?)
+                ON CONFLICT(src_path) DO UPDATE SET
+                    src_path = excluded.src_path,
+                    saved_at = datetime('now')
+                """,
                 (src_path,),
             )
             self._conn.commit()
@@ -191,4 +196,5 @@ class SQLiteSink:
         return row["src_path"] if row else None
     def close(self) -> None:
         with self._lock:
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             self._conn.close()
