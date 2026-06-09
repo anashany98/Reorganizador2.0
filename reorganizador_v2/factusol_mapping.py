@@ -18,6 +18,7 @@ STATUS_NO_ENCONTRADO = "NO_ENCONTRADO_EN_EXCEL"
 STATUS_AMBIGUO = "AMBIGUO"
 STATUS_AMBIGUO_SERIE = "AMBIGUO_SERIE"
 STATUS_SERIE_NO_ENCONTRADA = "SERIE_NO_ENCONTRADA"
+STATUS_DATO_CORRUPTO = "DATO_CORRUPTO_EN_EXCEL"
 
 # Column definitions
 REQUIRED_COLUMNS = [
@@ -175,22 +176,45 @@ class FactusolMappingLoader:
 
         workbook = load_workbook(excel_path, read_only=True, data_only=True)
         try:
-            if self.sheet_name not in workbook.sheetnames:
-                raise ValueError(f"El Excel debe contener la hoja '{self.sheet_name}'.")
+            # Autodetectar la hoja: la primera que contenga todas las columnas
+            # obligatorias. Si no se encuentra, usar el nombre canonico y dejar
+            # que el error original salte.
+            target_sheet_name: str | None = None
+            for candidate in workbook.sheetnames:
+                candidate_sheet = workbook[candidate]
+                candidate_iter = candidate_sheet.iter_rows(values_only=True, max_row=1)
+                try:
+                    candidate_header_row = next(candidate_iter)
+                except StopIteration:
+                    continue
+                candidate_headers = {
+                    _cell_to_text(value) for value in candidate_header_row
+                }
+                if all(col in candidate_headers for col in REQUIRED_COLUMNS):
+                    target_sheet_name = candidate
+                    break
 
-            sheet = workbook[self.sheet_name]
+            if target_sheet_name is None:
+                if self.sheet_name not in workbook.sheetnames:
+                    raise ValueError(
+                        f"El Excel debe contener la hoja '{self.sheet_name}' o una hoja "
+                        f"con las columnas obligatorias: {', '.join(REQUIRED_COLUMNS)}."
+                    )
+                target_sheet_name = self.sheet_name
+
+            sheet = workbook[target_sheet_name]
             rows = sheet.iter_rows(values_only=True)
             try:
                 header_row = next(rows)
             except StopIteration as exc:
-                raise ValueError("La hoja Mapping_FactuSOL esta vacia.") from exc
+                raise ValueError(f"La hoja '{target_sheet_name}' esta vacia.") from exc
 
             headers = [_cell_to_text(value) for value in header_row]
             header_positions = {name: idx for idx, name in enumerate(headers) if name}
             missing = [column for column in REQUIRED_COLUMNS if column not in header_positions]
             if missing:
                 raise ValueError(
-                    "Faltan columnas obligatorias en Mapping_FactuSOL: "
+                    f"Faltan columnas obligatorias en '{target_sheet_name}': "
                     + ", ".join(missing)
                 )
 
@@ -219,7 +243,12 @@ class FactusolMappingLoader:
                     clave_app = f"{anio}-{serie}-{presupuesto}"
                 
                 cliente = data["Cliente"].strip()
-                sede = data["Sede_Hotel_Direccion"].strip() or cliente
+                # Si Sede_Hotel_Direccion viene vacia del Excel, la dejamos como
+                # cadena vacia. NO hacemos fallback a `cliente`: eso duplicaba
+                # el segmento en la ruta final y producia paths >300 chars.
+                # El build de la ruta destino omitira el segmento sede cuando
+                # este vacio o sea igual al cliente.
+                sede = data["Sede_Hotel_Direccion"].strip()
                 
                 records.append(
                     FactusolBudgetRecord(
@@ -265,6 +294,33 @@ def sanitize_path_part(value: str, max_len: int = 80) -> str:
     if max_len > 0:
         text = text[:max_len].rstrip(" .")
     return text or "_SIN_NOMBRE"
+
+
+# Detecta caracteres de escrituras no-latinas (CJK, cirilico, arabe, hebreo, etc.)
+# que no deberian aparecer en nombres de cliente en este contexto.
+# Excluye los caracteres latinos extendidos que ya cubre _strip_accents (n, tildes, etc.).
+_CORRUPTED_CHARS_RE = re.compile(
+    r"[\u00A0"           # Espacio irrompible
+    r"\u3000-\u303F"     # Simbolos CJK (incluye 〰 wavy dash)
+    r"\u3040-\u309F"     # Hiragana
+    r"\u30A0-\u30FF"     # Katakana
+    r"\u3400-\u4DBF"     # CJK Extension A
+    r"\u4E00-\u9FFF"     # CJK Unified Ideographs
+    r"\uAC00-\uD7AF"     # Hangul (coreano)
+    r"\uF900-\uFAFF"     # CJK Compatibility Ideographs
+    r"\uFE30-\uFE4F"     # CJK Compatibility Forms
+    r"\uFF00-\uFFEF"     # Halfwidth and Fullwidth Forms
+    r"\U0001F300-\U0001F9FF"  # Emojis
+    r"]"
+)
+
+
+def has_corrupted_text(value: str | None) -> bool:
+    """Detecta si un valor contiene caracteres de escrituras no-latinas
+    que indican datos corruptos en el Excel (típicamente CJK por mojibake)."""
+    if not value:
+        return False
+    return bool(_CORRUPTED_CHARS_RE.search(str(value)))
 
 
 def detect_year_from_path(path: Path, allowed_years: set[str]) -> str | None:
@@ -499,16 +555,42 @@ def build_factusol_client_budget_destination_path(
 ) -> Path:
     if match_result.is_ok and match_result.record is not None:
         record = match_result.record
-        sede = record.sede_hotel_direccion or record.cliente
-        return (
-            dest_root
-            / sanitize_path_part(record.anio)
-            / sanitize_path_part(record.cliente)
-            / sanitize_path_part(sede)
-            / sanitize_path_part(f"Presupuesto {record.presupuesto}")
-            / categorize_document_type(src)
-            / src.name
+        # Si el nombre de cliente o sede contiene caracteres no-latinos (CJK,
+        # cirilico, arabe, etc.) probablemente el Excel tiene datos corruptos
+        # por mojibake. Mandamos el archivo a _REVISION con una razon explicita
+        # en vez de crear carpetas con nombres ilegibles.
+        if has_corrupted_text(record.cliente) or has_corrupted_text(record.sede_hotel_direccion):
+            match_result.status = STATUS_DATO_CORRUPTO
+            match_result.reason = (
+                f"Cliente/Sede con caracteres no-latinos en Excel "
+                f"(cliente={record.cliente!r}, sede={record.sede_hotel_direccion!r})"
+            )
+            review_root = dest_root / sanitize_path_part(unmatched_dir) / "_DATO_CORRUPTO"
+            relative_parent = _relative_parent(src, source_root)
+            return _append_relative(review_root, relative_parent) / src.name
+        # Estructura: DEST/ANIO/CLIENTE[/SEDE]/Presupuesto NUMERO/Tipo/archivo
+        # El segmento SEDE se omite si esta vacio o es identico al CLIENTE para
+        # evitar paths duplicados (cliente/cliente) que disparaban errores de
+        # path largo y bloqueos en overwrite.
+        parts: list = [
+            dest_root,
+            sanitize_path_part(record.anio),
+            sanitize_path_part(record.cliente),
+        ]
+        sede = (record.sede_hotel_direccion or "").strip()
+        if sede and sede != record.cliente:
+            parts.append(sanitize_path_part(sede))
+        parts.extend(
+            [
+                sanitize_path_part(f"Presupuesto {record.presupuesto}"),
+                categorize_document_type(src),
+                src.name,
+            ]
         )
+        result = Path(parts[0])
+        for segment in parts[1:]:
+            result = result / segment
+        return result
 
     review_root = dest_root / sanitize_path_part(unmatched_dir)
     relative_parent = _relative_parent(src, source_root)
@@ -650,7 +732,7 @@ def _ok_result(
         serie_excel=record.serie,
         clave_app=record.clave_app,
         cliente=record.cliente,
-        sede_hotel_direccion=record.sede_hotel_direccion or record.cliente,
+        sede_hotel_direccion=record.sede_hotel_direccion,
         referencia=record.referencia,
         origen_asignacion=record.origen_asignacion,
         clave_interna=record.clave_interna,
